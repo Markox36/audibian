@@ -1,0 +1,115 @@
+use std::cell::RefCell;
+use std::rc::Rc;
+
+use gtk4::prelude::*;
+use log::info;
+
+use crate::audio::{AudioGraph, PwEvent, PwThread};
+use crate::audio::effects::cleanup_orphaned_eq_sinks;
+use crate::profiles::ProfileStore;
+
+use super::window::MainWindow;
+
+pub struct AudibianApp {
+    app: libadwaita::Application,
+}
+
+impl AudibianApp {
+    pub fn new() -> Self {
+        let app = libadwaita::Application::builder()
+            .application_id("com.github.audibian")
+            .flags(gio::ApplicationFlags::FLAGS_NONE)
+            .build();
+
+        app.connect_activate(|a| Self::on_activate(a));
+
+        Self { app }
+    }
+
+    pub fn run(&self) {
+        self.app.run();
+    }
+
+    fn on_activate(app: &libadwaita::Application) {
+        cleanup_orphaned_eq_sinks();
+
+        // Shared graph model (GTK main thread only — Rc is intentional)
+        let graph = Rc::new(RefCell::new(AudioGraph::new()));
+
+        // Channel: PipeWire thread → GTK main thread (async, bounded)
+        let (pw_event_tx, pw_event_rx) = async_channel::unbounded::<PwEvent>();
+
+        // Spawn PipeWire monitoring thread
+        let pw_thread = Rc::new(PwThread::spawn(pw_event_tx));
+
+        // Profile store
+        let profile_store = Rc::new(RefCell::new(ProfileStore::new()));
+
+        // Build main window
+        let window = MainWindow::new(app, graph.clone(), pw_thread.clone(), profile_store);
+
+        // Attach event loop: receive PwEvents on the GLib main loop via spawn_local
+        let graph_ref = graph.clone();
+        let window_ref = window.clone();
+        glib::MainContext::default().spawn_local(async move {
+            while let Ok(event) = pw_event_rx.recv().await {
+                handle_pw_event(event, &graph_ref, &window_ref);
+            }
+        });
+
+        window.present();
+        info!("Audibian started");
+    }
+}
+
+fn handle_pw_event(event: PwEvent, graph: &Rc<RefCell<AudioGraph>>, window: &MainWindow) {
+    let mut g = graph.borrow_mut();
+    match event {
+        PwEvent::NodeAdded(node) => {
+            g.add_node(node);
+            drop(g);
+            window.refresh_patchbay();
+            window.refresh_mixer();
+            window.refresh_effects();
+        }
+        PwEvent::NodeRemoved(id) => {
+            g.remove_node(id);
+            drop(g);
+            window.refresh_patchbay();
+            window.refresh_mixer();
+            window.refresh_effects();
+        }
+        PwEvent::PortAdded(port) => {
+            g.add_port(port);
+            drop(g);
+            window.refresh_patchbay();
+        }
+        PwEvent::PortRemoved(id) => {
+            g.remove_port(id);
+            drop(g);
+            window.refresh_patchbay();
+        }
+        PwEvent::LinkAdded(link) => {
+            g.add_link(link);
+            drop(g);
+            window.refresh_patchbay();
+        }
+        PwEvent::LinkRemoved(id) => {
+            g.remove_link(id);
+            drop(g);
+            window.refresh_patchbay();
+        }
+        PwEvent::NodeVolume { node_id, volume, muted } => {
+            if let Some(node) = g.nodes.get_mut(&node_id) {
+                node.volume = volume;
+                node.muted = muted;
+            }
+            drop(g);
+            window.refresh_mixer();
+        }
+        PwEvent::Disconnected => {
+            drop(g);
+            window.show_disconnected_banner();
+        }
+    }
+}

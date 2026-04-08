@@ -1,0 +1,31 @@
+[package]
+name = "audibian"
+version = "0.1.0"
+edition = "2021"
+description = "Audio manager for Debian — patchbay, mixer, EQ and profiles over PipeWire"
+license = "GPL-3.0"
+
+[[bin]]
+name = "audibian"
+path = "src/main.rs"
+
+[dependencies]
+gtk4 = { version = "0.9", features = ["v4_12"] }
+libadwaita = { version = "0.7", features = ["v1_5"] }
+glib = "0.20"
+gio = "0.20"
+cairo-rs = { version = "0.20", features = ["png"] }
+pango = "0.20"
+pangocairo = "0.20"
+
+pipewire = "0.8"
+
+serde = { version = "1", features = ["derive"] }
+toml = "0.8"
+
+log = "0.4"
+env_logger = "0.11"
+
+async-channel = "2"
+
+[dev-dependencies]
