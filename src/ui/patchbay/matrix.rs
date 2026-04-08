@@ -4,6 +4,10 @@ use std::rc::Rc;
 use gtk4::prelude::*;
 use crate::audio::{AudioGraph, PwCommand, PwThread};
 
+thread_local! {
+    static ALIASES: RefCell<std::collections::HashMap<u32, String>> = RefCell::new(std::collections::HashMap::new());
+}
+
 pub fn build_matrix_container(_graph_rc: Rc<RefCell<AudioGraph>>, _pw: Rc<PwThread>) -> (gtk4::ScrolledWindow, gtk4::Box) {
     let container = gtk4::Box::builder()
         .orientation(gtk4::Orientation::Horizontal)
@@ -54,21 +58,66 @@ pub fn refresh_matrix(container: &gtk4::Box, graph: &AudioGraph, pw: Rc<PwThread
 
     // ====== SENDERS (Channel Strips) ======
     for sender_node in senders {
-        let out_ports = graph.output_ports_for_node(sender_node.id);
+        let out_ports: Vec<_> = graph.output_ports_for_node(sender_node.id).into_iter().cloned().collect();
+        let mut sorted_out_ports = out_ports.clone();
+        sorted_out_ports.sort_by_key(|p| p.port_index);
+        
+        let saved_alias = ALIASES.with(|a| a.borrow().get(&sender_node.id).cloned().unwrap_or_else(|| sender_node.display_name().to_string()));
         
         let frame = gtk4::Frame::builder()
-            .label(sender_node.display_name())
-            .width_request(220)
+            .width_request(260)
             .build();
             
-        let vbox = gtk4::Box::builder().orientation(gtk4::Orientation::Vertical).spacing(8).margin_top(8).margin_bottom(8).margin_start(8).margin_end(8).build();
+        let vbox_header = gtk4::Box::builder().orientation(gtk4::Orientation::Vertical).spacing(2).build();
+        
+        let alias_entry = gtk4::Entry::builder()
+            .text(&saved_alias)
+            .placeholder_text("Añadir Alias...")
+            .css_classes(["flat", "caption"])
+            .build();
+            
+        let sid = sender_node.id;
+        alias_entry.connect_changed(move |entry| {
+            ALIASES.with(|a| a.borrow_mut().insert(sid, entry.text().to_string()));
+        });
+            
+        let original_title = gtk4::Label::builder()
+            .label(&format!("({})", sender_node.display_name()))
+            .css_classes(["dim-label"])
+            .halign(gtk4::Align::Center)
+            .build();
+            
+        vbox_header.append(&alias_entry);
+        vbox_header.append(&original_title);
+            
+        frame.set_label_widget(Some(&vbox_header));
+            
+        let vbox = gtk4::Box::builder().orientation(gtk4::Orientation::Vertical).spacing(8).margin_top(4).margin_bottom(8).margin_start(8).margin_end(8).build();
+        
+        // Color Border
+        let color_bar = gtk4::DrawingArea::builder().height_request(4).margin_bottom(8).build();
+        let hash_val = sender_node.id as f64 * 0.17;
+        color_bar.set_draw_func(move |_, ctx, w, h| {
+            ctx.set_source_rgb(0.2 + (hash_val.sin() * 0.3).abs(), 0.5 + (hash_val.cos() * 0.3).abs(), 0.7);
+            ctx.rectangle(0.0, 0.0, w as f64, h as f64);
+            let _ = ctx.fill();
+        });
+        vbox.append(&color_bar);
 
-        // Target Mode Dropdown
+        // Info label
+        let info = sender_node.media_class.as_deref().unwrap_or("Media");
+        let info_lbl = gtk4::Label::builder().label(info).css_classes(["dim-label"]).halign(gtk4::Align::Center).build();
+        vbox.append(&info_lbl);
+
         let mode_lbl = gtk4::Label::builder().label("Modo Envío").halign(gtk4::Align::Start).css_classes(["caption"]).build();
         vbox.append(&mode_lbl);
         
-        let modes = vec!["Ambos (Stereo L+R)", "Solo Izquierda (L)", "Solo Derecha (R)"];
-        let mode_dropdown = gtk4::DropDown::from_strings(&modes);
+        let mut modes = vec!["Mezcla (Estéreo sumado L+R)".to_string()];
+        for p in &sorted_out_ports {
+            modes.push(format!("Mono individual: {}", p.name));
+        }
+        let modes_str: Vec<&str> = modes.iter().map(|s| s.as_str()).collect();
+        let mode_dropdown = gtk4::DropDown::from_strings(&modes_str);
         mode_dropdown.set_hexpand(true);
         vbox.append(&mode_dropdown);
 
@@ -94,6 +143,10 @@ pub fn refresh_matrix(container: &gtk4::Box, graph: &AudioGraph, pw: Rc<PwThread
         let cloned_out_ports: Vec<_> = out_ports.into_iter().map(|p| p.clone()).collect();
 
         for rec in &receivers {
+            if rec.id == sender_node.id {
+                continue; // Prevent loops
+            }
+
             let letter = rec_map.get(&rec.id).unwrap();
             let rec_id = rec.id;
             let is_active = active_targets.contains(&rec.id);
@@ -106,11 +159,14 @@ pub fn refresh_matrix(container: &gtk4::Box, graph: &AudioGraph, pw: Rc<PwThread
                 .width_request(40)
                 .build();
             
-            let rec_lbl = gtk4::Label::builder()
-                .label(rec.display_name())
-                .ellipsize(gtk4::pango::EllipsizeMode::End)
+            // Replaced long label with Ableton style disabled volume knob/fader
+            let fader = gtk4::Scale::builder()
+                .orientation(gtk4::Orientation::Horizontal)
+                .adjustment(&gtk4::Adjustment::new(100.0, 0.0, 100.0, 1.0, 10.0, 0.0))
                 .hexpand(true)
-                .halign(gtk4::Align::Start)
+                .draw_value(false)
+                .sensitive(false)
+                .tooltip_text("PipeWire no soporta envíos de volumen por cable (requiere Loopback)")
                 .build();
                 
             let d_mode = mode_dropdown.clone();
@@ -132,7 +188,7 @@ pub fn refresh_matrix(container: &gtk4::Box, graph: &AudioGraph, pw: Rc<PwThread
                     let mut links_to_make = Vec::new();
                     
                     match mode_idx {
-                        0 => { // Ambos (Stereo L+R)
+                        0 => { // Mezcla (Estéreo Auto)
                             for (i, out_p) in my_outs.iter().enumerate() {
                                 if let Some(in_p) = tgt_ins.get(i) {
                                     links_to_make.push((out_p.id, in_p.id));
@@ -141,16 +197,10 @@ pub fn refresh_matrix(container: &gtk4::Box, graph: &AudioGraph, pw: Rc<PwThread
                                 }
                             }
                         }
-                        1 => { // Solo Izquierda (L)
-                            if let Some(out_p) = my_outs.first() {
-                                if let Some(in_p) = tgt_ins.first() {
-                                    links_to_make.push((out_p.id, in_p.id));
-                                }
-                            }
-                        }
-                        2 => { // Solo Derecha (R)
-                            if let Some(out_p) = my_outs.get(1).or_else(|| my_outs.first()) {
-                                if let Some(in_p) = tgt_ins.get(1).or_else(|| tgt_ins.first()) {
+                        n if n > 0 && n <= my_outs.len() => { // Canal Mono separado
+                            if let Some(out_p) = my_outs.get(n - 1) {
+                                // Lo enviamos a todos los canales in para que el mono suene centrado (o suene directamente en L/R)
+                                for in_p in &tgt_ins {
                                     links_to_make.push((out_p.id, in_p.id));
                                 }
                             }
@@ -179,7 +229,7 @@ pub fn refresh_matrix(container: &gtk4::Box, graph: &AudioGraph, pw: Rc<PwThread
             });
 
             row.append(&toggle);
-            row.append(&rec_lbl);
+            row.append(&fader);
             sends_box.append(&row);
         }
 
@@ -197,18 +247,58 @@ pub fn refresh_matrix(container: &gtk4::Box, graph: &AudioGraph, pw: Rc<PwThread
     // ====== RECEIVERS (Return Tracks) ======
     for rec in receivers {
         let letter = rec_map.get(&rec.id).unwrap();
+        
+        let saved_alias = ALIASES.with(|a| a.borrow().get(&rec.id).cloned().unwrap_or_else(|| rec.display_name().to_string()));
+        let title = format!("[{}] {}", letter, saved_alias);
+        
         let frame = gtk4::Frame::builder()
-            .label(&format!("Return {}", letter))
             .width_request(150)
             .css_classes(["card"])
             .build();
             
-        let vbox = gtk4::Box::builder().orientation(gtk4::Orientation::Vertical).spacing(8).margin_top(8).margin_bottom(8).margin_start(8).margin_end(8).build();
+        let vbox_header = gtk4::Box::builder().orientation(gtk4::Orientation::Vertical).spacing(2).build();
+            
+        let alias_entry = gtk4::Entry::builder()
+            .text(&title)
+            .placeholder_text("Alias...")
+            .css_classes(["flat", "caption"])
+            .build();
+            
+        let sid = rec.id;
+        alias_entry.connect_changed(move |entry| {
+            let t = entry.text().to_string();
+            let actual = if let Some(idx) = t.find("] ") { t[(idx+2)..].to_string() } else { t };
+            ALIASES.with(|a| a.borrow_mut().insert(sid, actual));
+        });
         
-        let name_lbl = gtk4::Label::builder().label(rec.display_name()).wrap(true).halign(gtk4::Align::Center).build();
-        vbox.append(&name_lbl);
+        let original_title = gtk4::Label::builder()
+            .label(&format!("({})", rec.display_name()))
+            .css_classes(["dim-label"])
+            .halign(gtk4::Align::Center)
+            .build();
+            
+        vbox_header.append(&alias_entry);
+        vbox_header.append(&original_title);
+            
+        frame.set_label_widget(Some(&vbox_header));
+            
+        let vbox = gtk4::Box::builder().orientation(gtk4::Orientation::Vertical).spacing(8).margin_top(4).margin_bottom(8).margin_start(8).margin_end(8).build();
         
-        // Show active inputs? Optional.
+        // Color Border
+        let color_bar = gtk4::DrawingArea::builder().height_request(4).margin_bottom(8).build();
+        let hash_val = rec.id as f64 * 0.25;
+        color_bar.set_draw_func(move |_, ctx, w, h| {
+            ctx.set_source_rgb(0.7, 0.3 + (hash_val.sin() * 0.3).abs(), 0.2 + (hash_val.cos() * 0.4).abs());
+            ctx.rectangle(0.0, 0.0, w as f64, h as f64);
+            let _ = ctx.fill();
+        });
+        vbox.append(&color_bar);
+        
+        let info = rec.media_class.as_deref().unwrap_or("Destino");
+        let info_lbl = gtk4::Label::builder().label(info).css_classes(["dim-label"]).halign(gtk4::Align::Center).build();
+        vbox.append(&info_lbl);
+        
+        // Removed old center label since we have alias entry
         
         frame.set_child(Some(&vbox));
         container.append(&frame);
