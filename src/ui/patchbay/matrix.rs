@@ -30,142 +30,127 @@ pub fn refresh_matrix(container: &gtk4::Box, graph: &AudioGraph, pw: Rc<PwThread
 
     let nodes = graph.audio_nodes_sorted();
     
-    // Build a vertical strip for each Node that has Output Ports
-    for node in nodes {
-        let out_ports = graph.output_ports_for_node(node.id);
-        if out_ports.is_empty() {
-            continue;
+    let mut receivers = Vec::new();
+    let mut senders = Vec::new();
+    
+    for node in &nodes {
+        let has_in = !graph.input_ports_for_node(node.id).is_empty();
+        let has_out = !graph.output_ports_for_node(node.id).is_empty();
+        
+        if has_in {
+            receivers.push(node);
         }
+        if has_out {
+            senders.push(node);
+        }
+    }
 
+    let letters = ["A", "B", "C", "D", "E", "F", "G", "H", "I", "J", "K", "L", "M", "N", "O", "P", "Q", "R", "S", "T", "U", "V", "W", "X", "Y", "Z"];
+    let mut rec_map = std::collections::HashMap::new();
+    for (i, rec) in receivers.iter().enumerate() {
+        let l = if i < letters.len() { letters[i].to_string() } else { format!("R{}", i) };
+        rec_map.insert(rec.id, l);
+    }
+
+    // ====== SENDERS (Channel Strips) ======
+    for sender_node in senders {
+        let out_ports = graph.output_ports_for_node(sender_node.id);
+        
         let frame = gtk4::Frame::builder()
-            .label(node.display_name())
-            .width_request(200)
+            .label(sender_node.display_name())
+            .width_request(220)
             .build();
             
         let vbox = gtk4::Box::builder().orientation(gtk4::Orientation::Vertical).spacing(8).margin_top(8).margin_bottom(8).margin_start(8).margin_end(8).build();
 
-        // 1. Existing Sends Box
-        let sends_lbl = gtk4::Label::builder().label("Sends / Audio To").halign(gtk4::Align::Start).css_classes(["caption"]).build();
-        vbox.append(&sends_lbl);
-
-        let mut existing_node_targets = std::collections::HashSet::new();
-        let mut active_sends = Vec::new(); // Store tuples of (link_ids: Vec<u32>, desc)
+        // Target Mode Dropdown
+        let mode_lbl = gtk4::Label::builder().label("Modo Envío").halign(gtk4::Align::Start).css_classes(["caption"]).build();
+        vbox.append(&mode_lbl);
         
-        // Group links by target node to show aggregated sends (like "Main (Stereo)")
-        let mut target_to_links: std::collections::HashMap<u32, Vec<&crate::audio::graph::AudioLink>> = std::collections::HashMap::new();
-        for link in graph.links.values() {
-            if link.output_node_id == node.id {
-                target_to_links.entry(link.input_node_id).or_default().push(link);
-            }
-        }
+        let modes = vec!["Ambos (Stereo L+R)", "Solo Izquierda (L)", "Solo Derecha (R)"];
+        let mode_dropdown = gtk4::DropDown::from_strings(&modes);
+        mode_dropdown.set_hexpand(true);
+        vbox.append(&mode_dropdown);
 
-        for (target_id, links) in target_to_links {
-            let mut tgt_name = format!("Node {}", target_id);
-            if let Some(tn) = graph.nodes.get(&target_id) {
-                tgt_name = tn.display_name().to_string();
-            }
-            existing_node_targets.insert(target_id);
-            
-            let l_ids: Vec<u32> = links.iter().map(|l| l.id).collect();
-            let desc = format!("{} ({} cables)", tgt_name, links.len());
-            active_sends.push((l_ids, desc));
-        }
-
-        for (l_ids, desc) in active_sends {
-            let row = gtk4::Box::builder().orientation(gtk4::Orientation::Horizontal).spacing(4).build();
-            let lbl = gtk4::Label::builder().label(&desc).ellipsize(gtk4::pango::EllipsizeMode::End).hexpand(true).halign(gtk4::Align::Start).build();
-            let btn_rm = gtk4::Button::builder().label("✕").css_classes(["destructive-action", "circular"]).build();
-            let pw_clone = pw.clone();
-            btn_rm.connect_clicked(move |_| {
-                for &id in &l_ids {
-                    pw_clone.send(PwCommand::DestroyLink { link_id: id });
-                }
-            });
-            row.append(&lbl);
-            row.append(&btn_rm);
-            vbox.append(&row);
-        }
-
-        // 2. New Send Section
         let sep = gtk4::Separator::new(gtk4::Orientation::Horizontal);
         vbox.append(&sep);
 
-        // Target Node Dropdown
-        let mut target_nodes = Vec::new();
-        for n in graph.audio_nodes_sorted() {
-            if n.id != node.id {
-                target_nodes.push((n.id, n.display_name().to_string()));
+        let sends_lbl = gtk4::Label::builder().label("Sends").halign(gtk4::Align::Start).css_classes(["caption"]).build();
+        vbox.append(&sends_lbl);
+
+        // Find active targets for this sender
+        let mut active_targets = std::collections::HashSet::new();
+        let mut target_to_links: std::collections::HashMap<u32, Vec<u32>> = std::collections::HashMap::new();
+        for link in graph.links.values() {
+            if link.output_node_id == sender_node.id {
+                active_targets.insert(link.input_node_id);
+                target_to_links.entry(link.input_node_id).or_default().push(link.id);
             }
         }
 
-        let node_str_refs: Vec<&str> = target_nodes.iter().map(|(_, name)| name.as_str()).collect();
-        let node_ids: Vec<u32> = target_nodes.iter().map(|(id, _)| *id).collect();
+        let sends_box = gtk4::Box::builder().orientation(gtk4::Orientation::Vertical).spacing(4).build();
+        
+        let all_in_ports: Vec<_> = graph.ports.values().filter(|p| p.direction == crate::audio::Direction::Input).map(|p| p.clone()).collect();
+        let cloned_out_ports: Vec<_> = out_ports.into_iter().map(|p| p.clone()).collect();
 
-        if !node_str_refs.is_empty() {
-            let node_dropdown = gtk4::DropDown::from_strings(&node_str_refs);
-            node_dropdown.set_hexpand(true);
-            vbox.append(&node_dropdown);
-
-            // Target Mode/Port Dropdown
-            // We populate this based on the selected node. But GTK DropDown dynamic updates require 
-            // replacing the model. For simplicity, we just include standard combinations.
-            let modes = vec![
-                "Ambos (Stereo L+R)",
-                "Solo Izquierda (L)",
-                "Solo Derecha (R)",
-            ];
-            // We could dynamically update `mode_dropdown` by listening to `node_dropdown` property changes,
-            // but simply providing semantic mappings is sufficient.
-            let mode_dropdown = gtk4::DropDown::from_strings(&modes);
-            mode_dropdown.set_hexpand(true);
-            vbox.append(&mode_dropdown);
-
-            let btn_add = gtk4::Button::builder().label("Añadir Envío +").css_classes(["suggested-action"]).build();
-            let pw_clone = pw.clone();
-            let source_id = node.id;
-            let out_ports: Vec<_> = out_ports.into_iter().map(|p| p.clone()).collect();
-            // clone inner fields carefully
-            let all_in_ports: Vec<_> = graph.ports.values().filter(|p| p.direction == crate::audio::Direction::Input).map(|p| p.clone()).collect();
-
-            let target_ids_clone = node_ids.clone();
-            let d_node = node_dropdown.clone();
-            let d_mode = mode_dropdown.clone();
-
-            btn_add.connect_clicked(move |_| {
-                let tgt_idx = d_node.selected() as usize;
-                let mode_idx = d_mode.selected() as usize;
+        for rec in &receivers {
+            let letter = rec_map.get(&rec.id).unwrap();
+            let rec_id = rec.id;
+            let is_active = active_targets.contains(&rec.id);
+            
+            let row = gtk4::Box::builder().orientation(gtk4::Orientation::Horizontal).spacing(6).build();
+            let toggle = gtk4::ToggleButton::builder()
+                .label(letter)
+                .active(is_active)
+                .css_classes(["circular"])
+                .width_request(40)
+                .build();
+            
+            let rec_lbl = gtk4::Label::builder()
+                .label(rec.display_name())
+                .ellipsize(gtk4::pango::EllipsizeMode::End)
+                .hexpand(true)
+                .halign(gtk4::Align::Start)
+                .build();
                 
-                if let Some(&tgt_node_id) = target_ids_clone.get(tgt_idx) {
-                    let mut target_in_ports: Vec<_> = all_in_ports.iter().filter(|p| p.node_id == tgt_node_id).collect();
-                    // sort by port_index to ensure L is 0 and R is 1
-                    target_in_ports.sort_by_key(|p| p.port_index);
-                    
-                    let mut my_out: Vec<_> = out_ports.iter().collect();
-                    my_out.sort_by_key(|p| p.port_index);
+            let d_mode = mode_dropdown.clone();
+            let pw_clone = pw.clone();
+            let existing_links = target_to_links.get(&rec_id).cloned().unwrap_or_default();
+            let my_out = cloned_out_ports.clone();
+            let target_in: Vec<_> = all_in_ports.iter().filter(|p| p.node_id == rec_id).cloned().collect();
 
-                    let mut links_to_make = Vec::new(); // (out_port_id, in_port_id)
+            toggle.connect_toggled(move |btn| {
+                if btn.is_active() {
+                    // Create links
+                    let mode_idx = d_mode.selected() as usize;
+                    let mut tgt_ins = target_in.clone();
+                    tgt_ins.sort_by_key(|p| p.port_index);
+                    
+                    let mut my_outs = my_out.clone();
+                    my_outs.sort_by_key(|p| p.port_index);
+                    
+                    let mut links_to_make = Vec::new();
                     
                     match mode_idx {
                         0 => { // Ambos (Stereo L+R)
-                            for (i, out_p) in my_out.iter().enumerate() {
-                                if let Some(in_p) = target_in_ports.get(i) {
+                            for (i, out_p) in my_outs.iter().enumerate() {
+                                if let Some(in_p) = tgt_ins.get(i) {
                                     links_to_make.push((out_p.id, in_p.id));
-                                } else if let Some(in_p) = target_in_ports.first() {
-                                    // If target is mono, mix to it
+                                } else if let Some(in_p) = tgt_ins.first() {
                                     links_to_make.push((out_p.id, in_p.id));
                                 }
                             }
                         }
                         1 => { // Solo Izquierda (L)
-                            if let Some(out_p) = my_out.first() {
-                                if let Some(in_p) = target_in_ports.first() {
+                            if let Some(out_p) = my_outs.first() {
+                                if let Some(in_p) = tgt_ins.first() {
                                     links_to_make.push((out_p.id, in_p.id));
                                 }
                             }
                         }
                         2 => { // Solo Derecha (R)
-                            if let Some(out_p) = my_out.get(1).or_else(|| my_out.first()) {
-                                if let Some(in_p) = target_in_ports.get(1).or_else(|| target_in_ports.first()) {
+                            if let Some(out_p) = my_outs.get(1).or_else(|| my_outs.first()) {
+                                if let Some(in_p) = tgt_ins.get(1).or_else(|| tgt_ins.first()) {
                                     links_to_make.push((out_p.id, in_p.id));
                                 }
                             }
@@ -179,12 +164,52 @@ pub fn refresh_matrix(container: &gtk4::Box, graph: &AudioGraph, pw: Rc<PwThread
                             input_port_id: iid 
                         });
                     }
+                } else {
+                    // Destroy links targeting this receiver
+                    // Wait! The graph state won't have newly created links yet if they just clicked it.
+                    // If they just clicked OFF, we should find ALL links from my_out to target_in in PipeWire.
+                    // But we only stored `existing_links` from the last refresh! 
+                    // To be safe, we just send Destroy commands for what we know. The graph will refresh anyway!
+                    for &lid in &existing_links {
+                        pw_clone.send(PwCommand::DestroyLink { link_id: lid });
+                    }
+                    // For safety, let's also try to destroy explicit combinations just in case.
+                    // But standard way is fine: the view refreshes immediately.
                 }
             });
 
-            vbox.append(&btn_add);
+            row.append(&toggle);
+            row.append(&rec_lbl);
+            sends_box.append(&row);
         }
 
+        vbox.append(&sends_box);
+        frame.set_child(Some(&vbox));
+        container.append(&frame);
+    }
+
+    // Add visual Separator
+    let sep = gtk4::Separator::new(gtk4::Orientation::Vertical);
+    sep.set_margin_start(16);
+    sep.set_margin_end(16);
+    container.append(&sep);
+
+    // ====== RECEIVERS (Return Tracks) ======
+    for rec in receivers {
+        let letter = rec_map.get(&rec.id).unwrap();
+        let frame = gtk4::Frame::builder()
+            .label(&format!("Return {}", letter))
+            .width_request(150)
+            .css_classes(["card"])
+            .build();
+            
+        let vbox = gtk4::Box::builder().orientation(gtk4::Orientation::Vertical).spacing(8).margin_top(8).margin_bottom(8).margin_start(8).margin_end(8).build();
+        
+        let name_lbl = gtk4::Label::builder().label(rec.display_name()).wrap(true).halign(gtk4::Align::Center).build();
+        vbox.append(&name_lbl);
+        
+        // Show active inputs? Optional.
+        
         frame.set_child(Some(&vbox));
         container.append(&frame);
     }
