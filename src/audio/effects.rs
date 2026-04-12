@@ -82,7 +82,7 @@ pub fn start_eq(target_sink: &str, bands: &[EqBand], sample_rate: u32) -> Option
     })
 }
 
-/// Kill any orphaned audibian-eq filter-chain processes on startup.
+/// Kill any orphaned audibian filter-chain configs on startup.
 pub fn cleanup_orphaned_eq_sinks() {
     let dir = match std::fs::read_dir("/tmp") {
         Ok(d) => d,
@@ -92,11 +92,142 @@ pub fn cleanup_orphaned_eq_sinks() {
     for entry in dir.flatten() {
         let name = entry.file_name();
         let name = name.to_string_lossy();
-        if name.starts_with("audibian-eq-") && name.ends_with(".conf") {
+        if (name.starts_with("audibian-eq-") || name.starts_with("audibian-ns-"))
+            && name.ends_with(".conf")
+        {
             let _ = std::fs::remove_file(entry.path());
-            warn!("Removed orphaned EQ config: {name}");
+            warn!("Removed orphaned filter-chain config: {name}");
         }
     }
+}
+
+// ---------------------------------------------------------------------------
+// Noise Suppression
+// ---------------------------------------------------------------------------
+
+/// Handle to a running noise-suppression filter-chain process.
+pub struct NsInstance {
+    pub source_name: String,
+    #[allow(dead_code)]
+    pub virtual_source_name: String,
+    config_path: PathBuf,
+    process: Child,
+}
+
+impl NsInstance {
+    pub fn virtual_source_name(source_name: &str) -> String {
+        format!("audibian-ns-{source_name}")
+    }
+}
+
+impl Drop for NsInstance {
+    fn drop(&mut self) {
+        let _ = self.process.kill();
+        let _ = std::fs::remove_file(&self.config_path);
+        info!("Noise suppression for '{}' stopped", self.source_name);
+    }
+}
+
+/// Spawn a WebRTC noise suppressor for `source_name` via
+/// `libpipewire-module-echo-cancel` with the WebRTC AEC backend.
+///
+/// Creates a virtual `Audio/Source` named `audibian-ns-{source_name}` that
+/// applications can use instead of the real microphone to receive denoised audio.
+/// An accompanying reference sink (`audibian-ns-{source_name}-ref`) is also created
+/// by the echo-cancel module but can be ignored for pure noise suppression.
+pub fn start_noise_suppression(source_name: &str) -> Option<NsInstance> {
+    let virtual_name = NsInstance::virtual_source_name(source_name);
+    // Sanitise the name for use in a file path
+    let safe_name = source_name.replace(['/', ' ', ':'], "_");
+    let config_path = PathBuf::from(format!("/tmp/audibian-ns-{safe_name}.conf"));
+
+    let config = build_ns_config(source_name, &virtual_name);
+
+    {
+        let mut f = match std::fs::File::create(&config_path) {
+            Ok(f) => f,
+            Err(e) => {
+                error!("Cannot write NS config to {config_path:?}: {e}");
+                return None;
+            }
+        };
+        if let Err(e) = f.write_all(config.as_bytes()) {
+            error!("Cannot write NS config: {e}");
+            return None;
+        }
+    }
+
+    let process = match Command::new("pipewire")
+        .arg("-c")
+        .arg(&config_path)
+        .spawn()
+    {
+        Ok(p) => p,
+        Err(e) => {
+            error!("Failed to spawn pipewire filter-chain for NS: {e}");
+            let _ = std::fs::remove_file(&config_path);
+            return None;
+        }
+    };
+
+    info!(
+        "Noise suppression started for '{}' → virtual '{}'",
+        source_name, virtual_name
+    );
+
+    Some(NsInstance {
+        source_name: source_name.to_string(),
+        virtual_source_name: virtual_name,
+        config_path,
+        process,
+    })
+}
+
+fn build_ns_config(source_name: &str, virtual_name: &str) -> String {
+    let ref_sink_name = format!("{virtual_name}-ref");
+    format!(
+        r#"# Audibian Noise Suppression (WebRTC) for {source_name}
+context.properties = {{
+    log.level = 0
+}}
+
+context.modules = [
+    {{ name = libpipewire-module-rt
+      args = {{ nice.level = -11 }}
+      flags = [ ifexists nofail ]
+    }}
+    {{ name = libpipewire-module-echo-cancel
+      args = {{
+        library = aec/libspa-aec-webrtc
+        aec.args = {{
+            webrtc.noise_suppression     = true
+            webrtc.gain_control          = false
+            webrtc.voice_detection       = false
+            webrtc.transient_suppression = true
+            webrtc.high_pass_filter      = true
+        }}
+        capture.props = {{
+            node.name   = "{virtual_name}-capture"
+            node.target = "{source_name}"
+        }}
+        source.props = {{
+            node.name        = "{virtual_name}"
+            node.description = "Audibian NS ({source_name})"
+            media.class      = "Audio/Source"
+        }}
+        sink.props = {{
+            node.name        = "{ref_sink_name}"
+            node.description = "Audibian NS Ref ({source_name})"
+            media.class      = "Audio/Sink"
+        }}
+        playback.props = {{
+            node.name = "{virtual_name}-playback"
+        }}
+      }}
+    }}
+]
+"#
+    )
 }
 
 // ---------------------------------------------------------------------------

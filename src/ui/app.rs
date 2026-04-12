@@ -6,7 +6,7 @@ use log::info;
 
 use crate::audio::{AudioGraph, PwEvent, PwThread};
 use crate::audio::effects::cleanup_orphaned_eq_sinks;
-use crate::profiles::ProfileStore;
+use crate::profiles::{apply::apply_profile, AppConfig, ProfileStore};
 
 use super::window::MainWindow;
 
@@ -46,7 +46,7 @@ impl AudibianApp {
         let profile_store = Rc::new(RefCell::new(ProfileStore::new()));
 
         // Build main window
-        let window = MainWindow::new(app, graph.clone(), pw_thread.clone(), profile_store);
+        let window = MainWindow::new(app, graph.clone(), pw_thread.clone(), profile_store.clone());
 
         // Attach event loop: receive PwEvents on the GLib main loop via spawn_local
         let graph_ref = graph.clone();
@@ -56,6 +56,29 @@ impl AudibianApp {
                 handle_pw_event(event, &graph_ref, &window_ref);
             }
         });
+
+        // Apply default profile after a short delay to let PipeWire discover nodes
+        {
+            let graph_ref2 = graph.clone();
+            let pw_ref2 = pw_thread.clone();
+            let store_ref2 = profile_store.clone();
+            glib::MainContext::default().spawn_local(async move {
+                // Wait 3 seconds for PipeWire to enumerate all nodes/ports
+                glib::timeout_future(std::time::Duration::from_secs(3)).await;
+                let cfg = AppConfig::load();
+                if let Some(default_name) = &cfg.default_profile {
+                    if let Some(profile) = store_ref2.borrow().load(default_name) {
+                        let result = apply_profile(&profile, &graph_ref2.borrow(), &*pw_ref2);
+                        info!(
+                            "Default profile '{}' applied: {} links, {} unresolved",
+                            default_name,
+                            result.links_applied,
+                            result.unresolved_links.len()
+                        );
+                    }
+                }
+            });
+        }
 
         window.present();
         info!("Audibian started");

@@ -104,6 +104,7 @@ impl MainWindow {
 
     pub fn refresh_effects(&self) {
         self.effects.refresh_sinks();
+        self.effects.refresh_sources();
     }
 
     pub fn show_disconnected_banner(&self) {
