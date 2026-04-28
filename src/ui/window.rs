@@ -36,6 +36,7 @@ impl MainWindow {
             .title("Audibian")
             .default_width(1100)
             .default_height(700)
+            .icon_name("audibian")
             .build();
 
         // --- Disconnected banner ---

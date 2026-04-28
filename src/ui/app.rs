@@ -31,6 +31,22 @@ impl AudibianApp {
     }
 
     fn on_activate(app: &libadwaita::Application) {
+        // Register local icon path so the icon works without installing the app.
+        // When installed, the icon is in the system hicolor theme and this is a no-op.
+        let icon_theme = gtk4::IconTheme::for_display(&gtk4::gdk::Display::default().unwrap());
+        if let Ok(mut exe_dir) = std::env::current_exe() {
+            exe_dir.pop(); // strip binary name
+            // dev layout: <repo>/target/debug|release/audibian → go up twice then into data/icons
+            let candidate = exe_dir
+                .join("../../data/icons")
+                .canonicalize()
+                .unwrap_or_default();
+            if candidate.exists() {
+                icon_theme.add_search_path(&candidate);
+            }
+        }
+        app.set_application_id(Some("com.github.audibian"));
+
         cleanup_orphaned_eq_sinks();
 
         // Shared graph model (GTK main thread only — Rc is intentional)

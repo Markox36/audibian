@@ -4,6 +4,44 @@ version = "0.1.0"
 edition = "2021"
 description = "Audio manager for Debian — patchbay, mixer, EQ and profiles over PipeWire"
 license = "GPL-3.0"
+homepage = "https://github.com/Markox36/audibian"
+repository = "https://github.com/Markox36/audibian"
+readme = "README.md"
+
+# ── cargo-deb packaging ────────────────────────────────────────────────────
+[package.metadata.deb]
+maintainer = "Marcos <hello@markox.dev>"
+copyright = "2024, Marcos"
+license-file = ["LICENSE", "4"]
+extended-description = """\
+Audibian is a desktop audio management application for PipeWire.
+It provides a visual patchbay to connect/disconnect audio nodes,
+a per-application volume mixer, a 5-band parametric EQ, per-microphone
+WebRTC noise suppression, and persistent audio profiles with autostart support.
+Tested on Debian 12 (Bookworm)."""
+depends = "$auto, libgtk-4-1 (>= 4.12), libadwaita-1-0 (>= 1.5), pipewire (>= 0.3.52)"
+recommends = "pipewire-audio"
+section = "sound"
+priority = "optional"
+assets = [
+    ["target/release/audibian",                              "usr/bin/",                                              "755"],
+    ["data/audibian.desktop",                                "usr/share/applications/",                               "644"],
+    ["data/icons/scalable/apps/audibian.svg",                "usr/share/icons/hicolor/scalable/apps/",                "644"],
+    ["README.md",                                            "usr/share/doc/audibian/README",                         "644"],
+]
+
+# ── cargo-generate-rpm packaging ───────────────────────────────────────────
+[package.metadata.generate-rpm]
+assets = [
+    { source = "target/release/audibian",               dest = "/usr/bin/audibian",                                            mode = "755" },
+    { source = "data/audibian.desktop",                  dest = "/usr/share/applications/audibian.desktop",                    mode = "644" },
+    { source = "data/icons/scalable/apps/audibian.svg",  dest = "/usr/share/icons/hicolor/scalable/apps/audibian.svg",         mode = "644" },
+    { source = "README.md",                              dest = "/usr/share/doc/audibian/README",                               mode = "644" },
+]
+
+[package.metadata.generate-rpm.requires]
+"gtk4" = ">= 4.12"
+"pipewire-libs" = ">= 0.3.52"
 
 [[bin]]
 name = "audibian"
