@@ -23,12 +23,6 @@ Tested on **Debian 12 (Bookworm)** with PipeWire ≥ 0.3.65.
 
 ---
 
-## Screenshots
-
-> Place `banner.png` (or other screenshots) in the repository root.
-
----
-
 ## Requirements
 
 ### Runtime
