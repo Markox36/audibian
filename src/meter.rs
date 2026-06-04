@@ -4,11 +4,11 @@ use std::sync::{
 };
 use log::debug;
 use pipewire::{
-    context::Context,
-    main_loop::MainLoop,
+    context::ContextRc,
+    main_loop::MainLoopRc,
     properties::properties,
     spa,
-    stream::{Stream, StreamFlags},
+    stream::{StreamBox, StreamFlags},
 };
 use spa::{
     param::audio::{AudioFormat, AudioInfoRaw},
@@ -35,7 +35,7 @@ struct UserData {
     tx: async_channel::Sender<(String, f32)>,
     event_key: String,
     stop: Arc<AtomicBool>,
-    main_loop: MainLoop,
+    main_loop: MainLoopRc,
 }
 
 /// Spawn a native PipeWire capture stream for metering.
@@ -63,15 +63,15 @@ fn run_meter(
     tx: async_channel::Sender<(String, f32)>,
     stop: Arc<AtomicBool>,
 ) {
-    let main_loop = match MainLoop::new(None) {
+    let main_loop = match MainLoopRc::new(None) {
         Ok(ml) => ml,
         Err(e) => { debug!("meter {}: MainLoop: {e}", event_key); return; }
     };
-    let context = match Context::new(&main_loop) {
+    let context = match ContextRc::new(&main_loop, None) {
         Ok(c) => c,
         Err(e) => { debug!("meter {}: Context: {e}", event_key); return; }
     };
-    let core = match context.connect(None) {
+    let core = match context.connect_rc(None) {
         Ok(c) => c,
         Err(e) => { debug!("meter {}: connect: {e}", event_key); return; }
     };
@@ -83,7 +83,7 @@ fn run_meter(
         *pipewire::keys::TARGET_OBJECT   => target.as_str(),
     };
 
-    let stream = match Stream::new(&core, &format!("audibian-meter-{}", event_key), props) {
+    let stream = match StreamBox::new(&core, &format!("audibian-meter-{}", event_key), props) {
         Ok(s) => s,
         Err(e) => { debug!("meter {}: Stream: {e}", event_key); return; }
     };

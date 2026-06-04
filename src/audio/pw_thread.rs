@@ -10,8 +10,8 @@ use std::thread;
 
 use log::{debug, error, info};
 use pipewire::{
-    context::Context,
-    main_loop::MainLoop,
+    context::ContextRc,
+    main_loop::MainLoopRc,
     registry::GlobalObject,
     spa::utils::dict::DictRef,
     types::ObjectType,
@@ -103,7 +103,7 @@ impl PwThread {
 // ---------------------------------------------------------------------------
 
 fn pw_monitor_thread(event_tx: async_channel::Sender<PwEvent>) {
-    let main_loop = match MainLoop::new(None) {
+    let main_loop = match MainLoopRc::new(None) {
         Ok(ml) => ml,
         Err(e) => {
             error!("Failed to create PipeWire main loop: {e}");
@@ -111,7 +111,7 @@ fn pw_monitor_thread(event_tx: async_channel::Sender<PwEvent>) {
         }
     };
 
-    let context = match Context::new(&main_loop) {
+    let context = match ContextRc::new(&main_loop, None) {
         Ok(ctx) => ctx,
         Err(e) => {
             error!("Failed to create PipeWire context: {e}");
@@ -119,7 +119,7 @@ fn pw_monitor_thread(event_tx: async_channel::Sender<PwEvent>) {
         }
     };
 
-    let core = match context.connect(None) {
+    let core = match context.connect_rc(None) {
         Ok(c) => c,
         Err(e) => {
             error!("Failed to connect to PipeWire: {e}");

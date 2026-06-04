@@ -19,7 +19,7 @@ tauri-build = { version = "2", features = [] }
 tauri = { version = "2", features = ["tray-icon"] }
 serde_json = "1"
 
-pipewire = { version = "0.8", features = ["v0_3_44"] }
+pipewire = { version = "0.10", features = ["v1_2_0"] }
 
 serde = { version = "1", features = ["derive"] }
 toml = "0.8"
@@ -28,5 +28,36 @@ log = "0.4"
 env_logger = "0.11"
 
 async-channel = "2"
+
+[package.metadata.deb]
+maintainer = "Markox36 <kenabotai@outlook.com>"
+copyright = "2026, Markox36 <kenabotai@outlook.com>"
+license-file = ["LICENSE", "0"]
+extended-description = """\
+Audibian is an audio manager for Debian-based systems built on PipeWire.
+Provides a patchbay, mixer, equalizer and audio profiles in a single UI."""
+section = "sound"
+priority = "optional"
+depends = "$auto, libpipewire-0.3-0, pipewire"
+assets = [
+    ["target/release/audibian", "usr/bin/", "755"],
+    ["data/audibian.desktop", "usr/share/applications/", "644"],
+    ["data/icons/scalable/apps/audibian.svg", "usr/share/icons/hicolor/scalable/apps/", "644"],
+    ["data/icons/16x16/apps/audibian.png", "usr/share/icons/hicolor/16x16/apps/", "644"],
+    ["data/icons/24x24/apps/audibian.png", "usr/share/icons/hicolor/24x24/apps/", "644"],
+    ["data/icons/32x32/apps/audibian.png", "usr/share/icons/hicolor/32x32/apps/", "644"],
+    ["data/icons/48x48/apps/audibian.png", "usr/share/icons/hicolor/48x48/apps/", "644"],
+    ["data/icons/64x64/apps/audibian.png", "usr/share/icons/hicolor/64x64/apps/", "644"],
+    ["data/icons/128x128/apps/audibian.png", "usr/share/icons/hicolor/128x128/apps/", "644"],
+    ["data/icons/256x256/apps/audibian.png", "usr/share/icons/hicolor/256x256/apps/", "644"],
+    ["README.md", "usr/share/doc/audibian/README.md", "644"],
+]
+
+[package.metadata.generate-rpm]
+assets = [
+    { source = "target/release/audibian", dest = "/usr/bin/audibian", mode = "755" },
+    { source = "data/audibian.desktop", dest = "/usr/share/applications/audibian.desktop", mode = "644" },
+    { source = "data/icons/scalable/apps/audibian.svg", dest = "/usr/share/icons/hicolor/scalable/apps/audibian.svg", mode = "644" },
+]
 
 [dev-dependencies]

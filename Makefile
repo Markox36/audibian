@@ -4,7 +4,7 @@ DATADIR := $(PREFIX)/share
 
 ICON_SIZES := 16 24 32 48 64 128 256
 
-.PHONY: all build release install uninstall icons deb rpm appimage clean
+.PHONY: all build release install uninstall icons deb rpm arch arch-docker appimage clean
 
 # ── Build ──────────────────────────────────────────────────────────────────
 
@@ -77,6 +77,25 @@ rpm: release
 	  { echo "Install with: cargo install cargo-generate-rpm"; exit 1; }
 	cargo generate-rpm
 	@echo "Package ready in target/generate-rpm/"
+
+# ── Package: Arch (pacman .pkg.tar.zst) ───────────────────────────────────
+# Requires: base-devel (makepkg). Run on an Arch host or in an Arch container.
+
+arch: icons
+	@command -v makepkg >/dev/null 2>&1 || \
+	  { echo "makepkg not found. Run inside Arch Linux (pacman -S base-devel)."; exit 1; }
+	cd packaging/arch && makepkg -f -p PKGBUILD.local
+	@echo "Package ready in packaging/arch/*.pkg.tar.zst"
+
+# Build the Arch package on non-Arch hosts via Docker.
+arch-docker: icons
+	@command -v docker >/dev/null 2>&1 || { echo "docker not found."; exit 1; }
+	docker run --rm -v "$(CURDIR)":/src -w /src archlinux:latest bash -c '\
+	  pacman -Syu --noconfirm --needed base-devel rust pnpm nodejs pkgconf \
+	    webkit2gtk-4.1 gtk3 librsvg pipewire pipewire-pulse && \
+	  useradd -m builder && chown -R builder /src && \
+	  su builder -c "cd /src/packaging/arch && makepkg -f -p PKGBUILD.local"'
+	@echo "Package ready in packaging/arch/*.pkg.tar.zst"
 
 # ── Package: AppImage ─────────────────────────────────────────────────────
 
