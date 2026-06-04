@@ -1,0 +1,25 @@
+{
+  "productName": "audibian",
+  "version": "0.1.0",
+  "identifier": "com.github.audibian",
+  "build": {
+    "frontendDist": "ui/dist",
+    "devUrl": "http://localhost:5173",
+    "beforeBuildCommand": { "script": "pnpm run build", "cwd": "ui" },
+    "beforeDevCommand": { "script": "pnpm run dev -- --port 5173", "cwd": "ui" }
+  },
+  "app": {
+    "withGlobalTauri": true,
+    "windows": [
+      {
+        "label": "main",
+        "title": "Audibian",
+        "width": 1100,
+        "height": 700,
+        "minWidth": 800,
+        "minHeight": 600,
+        "devtools": true
+      }
+    ]
+  }
+}

@@ -1,3 +1,4 @@
 target
 data
 packaging
+ui/node_modules/*

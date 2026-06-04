@@ -1,12 +1,13 @@
 use std::collections::HashMap;
+use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Direction {
     Input,
     Output,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum MediaType {
     Audio,
     #[allow(dead_code)]
@@ -17,7 +18,7 @@ pub enum MediaType {
     Unknown,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum NodeType {
     Source,
     Sink,
@@ -26,7 +27,7 @@ pub enum NodeType {
     Unknown,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AudioPort {
     pub id: u32,
     pub node_id: u32,
@@ -38,7 +39,7 @@ pub struct AudioPort {
     pub port_index: u32,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AudioNode {
     pub id: u32,
     pub name: String,
@@ -65,7 +66,7 @@ impl AudioNode {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AudioLink {
     pub id: u32,
     pub output_node_id: u32,

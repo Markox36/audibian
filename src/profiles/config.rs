@@ -7,7 +7,7 @@ use std::path::PathBuf;
 use log::{error, info, warn};
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AppConfig {
     /// Profile name to apply automatically on startup (if any).
     #[serde(default)]
@@ -16,6 +16,29 @@ pub struct AppConfig {
     /// Whether Audibian should start with the desktop session.
     #[serde(default)]
     pub autostart: bool,
+
+    /// Global UI zoom factor (1.0 = 100%, 1.5 = 150%, etc.)
+    #[serde(default = "default_ui_scale")]
+    pub ui_scale: f32,
+
+    /// Low-latency PipeWire quantum (smaller buffer, more CPU).
+    /// When true, Audibian writes a pipewire.conf.d snippet bumping
+    /// `default.clock.quantum` down to 256 samples (~5ms @ 48k).
+    #[serde(default)]
+    pub low_latency: bool,
+}
+
+fn default_ui_scale() -> f32 { 1.0 }
+
+impl Default for AppConfig {
+    fn default() -> Self {
+        Self {
+            default_profile: None,
+            autostart: false,
+            ui_scale: 1.0,
+            low_latency: false,
+        }
+    }
 }
 
 impl AppConfig {

@@ -1,4 +1,5 @@
 use crate::audio::eq::EqBand;
+use crate::mixer::MixerSnapshot;
 use serde::{Deserialize, Serialize};
 
 /// Stable specification for a PipeWire link, using node/port names
@@ -45,6 +46,11 @@ pub struct AudioProfile {
     pub default_source: Option<String>,
     #[serde(default)]
     pub eq: Vec<EqSpec>,
+    /// Audibian mixer state (faders, sends levels, pan, mute, EQ).
+    /// Applied without recreating channels — virtual sinks / sends stay alive,
+    /// only levels and toggles update.
+    #[serde(default)]
+    pub mixer_snapshot: Option<MixerSnapshot>,
 }
 
 impl AudioProfile {
@@ -59,6 +65,7 @@ impl AudioProfile {
             default_sink: None,
             default_source: None,
             eq: Vec::new(),
+            mixer_snapshot: None,
         }
     }
 }
