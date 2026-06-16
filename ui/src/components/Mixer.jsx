@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react'
 import { invoke } from '@tauri-apps/api/core'
 import { listen } from '@tauri-apps/api/event'
-import { Settings, Plus, ZoomIn, Sparkles, X, Activity, GripVertical } from 'lucide-react'
+import { Settings, Plus, ZoomIn, Sparkles, X, Activity, GripVertical, RotateCcw } from 'lucide-react'
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -339,12 +339,27 @@ const InputStrip = React.memo(function InputStrip({
 
       {/* 5. dB readout + Fader */}
       <div className={`${SECTION_BG} p-1.5 ${SECTION_BORDER} flex flex-col gap-1.5 h-[164px] shrink-0 justify-between`}>
-        <div
-          onDoubleClick={() => setFader(faderKey, 100)}
-          className="bg-black border border-white/[0.06] rounded-sm text-center text-[9px] font-bold font-mono text-neutral-300 py-0.5 leading-tight cursor-pointer hover:border-[#4169e1]/40 hover:text-white transition-colors"
-          title="Double-click to reset to 0 dB"
-        >
-          {faderToDb(faderVal)}
+        <div className="flex gap-1 items-center shrink-0">
+          <div
+            onDoubleClick={() => {
+              setFader(faderKey, 100)
+              invoke('set_strip_volume', { id: ch.id, isInput: true, volume: 1.0 }).catch(console.error)
+            }}
+            className="flex-1 bg-black border border-white/[0.06] rounded-sm text-center text-[9px] font-bold font-mono text-neutral-300 py-0.5 leading-tight cursor-pointer hover:border-[#4169e1]/40 hover:text-white transition-colors select-none"
+            title="Double-click to reset to 0 dB"
+          >
+            {faderToDb(faderVal)}
+          </div>
+          <button
+            onClick={() => {
+              setFader(faderKey, 100)
+              invoke('set_strip_volume', { id: ch.id, isInput: true, volume: 1.0 }).catch(console.error)
+            }}
+            className="bg-black hover:bg-white/[0.06] border border-white/[0.06] hover:border-[#4169e1]/40 rounded-sm text-center py-0.5 px-1.5 text-neutral-400 hover:text-white transition-colors shrink-0 flex items-center justify-center"
+            title="Reset to 0.0 dB"
+          >
+            <RotateCcw className="w-2.5 h-2.5" />
+          </button>
         </div>
 
         <FaderAndMeter
@@ -504,11 +519,27 @@ const ReturnStrip = React.memo(function ReturnStrip({
 
       {/* 5. Fader */}
       <div className={`${SECTION_BG} p-1.5 ${SECTION_BORDER} flex flex-col gap-1.5 h-[164px] shrink-0 justify-between`}>
-        <div
-          onDoubleClick={() => setFader(faderKey, 100)}
-          className="bg-black border border-white/[0.06] rounded-sm text-center text-[9px] font-bold font-mono text-neutral-300 py-0.5 leading-tight cursor-pointer hover:border-[#4169e1]/40 hover:text-white transition-colors"
-        >
-          {faderToDb(faderVal)}
+        <div className="flex gap-1 items-center shrink-0">
+          <div
+            onDoubleClick={() => {
+              setFader(faderKey, 100)
+              invoke('set_strip_volume', { id: ret.id, isInput: false, volume: 1.0 }).catch(console.error)
+            }}
+            className="flex-1 bg-black border border-white/[0.06] rounded-sm text-center text-[9px] font-bold font-mono text-neutral-300 py-0.5 leading-tight cursor-pointer hover:border-[#4169e1]/40 hover:text-white transition-colors select-none"
+            title="Double-click to reset to 0 dB"
+          >
+            {faderToDb(faderVal)}
+          </div>
+          <button
+            onClick={() => {
+              setFader(faderKey, 100)
+              invoke('set_strip_volume', { id: ret.id, isInput: false, volume: 1.0 }).catch(console.error)
+            }}
+            className="bg-black hover:bg-white/[0.06] border border-white/[0.06] hover:border-[#4169e1]/40 rounded-sm text-center py-0.5 px-1.5 text-neutral-400 hover:text-white transition-colors shrink-0 flex items-center justify-center"
+            title="Reset to 0.0 dB"
+          >
+            <RotateCcw className="w-2.5 h-2.5" />
+          </button>
         </div>
 
         <FaderAndMeter
@@ -640,11 +671,27 @@ const MasterStrip = React.memo(function MasterStrip({
 
       {/* 5. Fader */}
       <div className={`${SECTION_BG} p-1.5 ${SECTION_BORDER} flex flex-col gap-1.5 h-[164px] shrink-0 justify-between`}>
-        <div
-          onDoubleClick={() => setFader('master', 100)}
-          className="bg-black border border-white/[0.06] rounded-sm text-center text-[9px] font-bold font-mono text-neutral-300 py-0.5 leading-tight cursor-pointer hover:border-[#4169e1]/40 hover:text-white transition-colors"
-        >
-          {faderToDb(faderVal)}
+        <div className="flex gap-1 items-center shrink-0">
+          <div
+            onDoubleClick={() => {
+              setFader('master', 100)
+              invoke('set_master_volume', { volume: 1.0 }).catch(console.error)
+            }}
+            className="flex-1 bg-black border border-white/[0.06] rounded-sm text-center text-[9px] font-bold font-mono text-neutral-300 py-0.5 leading-tight cursor-pointer hover:border-[#4169e1]/40 hover:text-white transition-colors select-none"
+            title="Double-click to reset to 0 dB"
+          >
+            {faderToDb(faderVal)}
+          </div>
+          <button
+            onClick={() => {
+              setFader('master', 100)
+              invoke('set_master_volume', { volume: 1.0 }).catch(console.error)
+            }}
+            className="bg-black hover:bg-white/[0.06] border border-white/[0.06] hover:border-[#4169e1]/40 rounded-sm text-center py-0.5 px-1.5 text-neutral-400 hover:text-white transition-colors shrink-0 flex items-center justify-center"
+            title="Reset to 0.0 dB"
+          >
+            <RotateCcw className="w-2.5 h-2.5" />
+          </button>
         </div>
 
         <FaderAndMeter
