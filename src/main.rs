@@ -5,6 +5,8 @@ mod state;
 mod mixer;
 mod matrix_config;
 mod meter;
+mod persistent;
+mod soundboard;
 
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
@@ -18,7 +20,43 @@ use tauri::menu::{Menu, MenuItem};
 use tauri::tray::TrayIconBuilder;
 
 fn main() {
+    // WebKitGTK DMA-BUF renderer is broken on many Linux GPU/driver combos
+    // (Mesa + NVIDIA + some Intel stacks), producing a blank window. Disable
+    // it before WebKit initializes. User can override by exporting the var
+    // themselves before launch.
+    if std::env::var_os("WEBKIT_DISABLE_DMABUF_RENDERER").is_none() {
+        // SAFETY: set before any WebKit/GTK init below.
+        unsafe { std::env::set_var("WEBKIT_DISABLE_DMABUF_RENDERER", "1"); }
+    }
+    // Disabling DMABUF alone is not enough on Debian/Wayland when launched
+    // via XDG autostart: WebKit still picks the accelerated compositor before
+    // the session GL context is ready, producing a window with no UI. Force
+    // the non-accelerated path so first paint always succeeds.
+    if std::env::var_os("WEBKIT_DISABLE_COMPOSITING_MODE").is_none() {
+        // SAFETY: set before any WebKit/GTK init below.
+        unsafe { std::env::set_var("WEBKIT_DISABLE_COMPOSITING_MODE", "1"); }
+    }
+
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info")).init();
+
+    // Headless mode: recreate the persistent routing graph (virtual sinks,
+    // returns, master, loopbacks, EQs) and exit. Used by the systemd user
+    // service so the audio graph is live from boot without the GUI running.
+    if std::env::args().any(|a| a == "--apply-persistent") {
+        commands::apply_low_latency_conf(AppConfig::load().low_latency);
+        let mut cfg = MixerConfig::load();
+        if cfg.ensure_soundboard_channel() {
+            cfg.save();
+        }
+        let restored = persistent::apply_persistent_state(&cfg);
+        // pactl modules survive our exit on their own; the only thing tied to
+        // this process is the StripEqInstance child handles. Leak the map so
+        // Drop doesn't kill them.
+        std::mem::forget(restored);
+        log::info!("audibian --apply-persistent: restoration complete");
+        return;
+    }
+
     pipewire::init();
 
     tauri::Builder::default()
@@ -35,38 +73,20 @@ fn main() {
             commands::apply_low_latency_conf(AppConfig::load().low_latency);
 
             // Restore all mixer modules (input null-sinks, return null-sinks, loopback sends).
-            let mixer_cfg = MixerConfig::load();
-            let input_channels: Vec<(u32, String)> = mixer_cfg.input_channels.iter()
-                .map(|c| (c.id, c.sink_name.clone()))
-                .collect();
-            let return_channels: Vec<(u32, String, String)> = mixer_cfg.return_channels.iter()
-                .map(|r| (r.id, r.sink_name.clone(), r.name.clone()))
-                .collect();
-            let source_channels: Vec<(u32, String, String, bool)> = mixer_cfg.input_channels.iter()
-                .filter_map(|c| c.source_name.as_ref().map(|src| (c.id, src.clone(), c.sink_name.clone(), c.mono)))
-                .collect();
-
-            let strip_levels: Vec<(String, f32, f32, bool)> = mixer_cfg.input_channels.iter()
-                .map(|c| (c.sink_name.clone(), c.fader, c.pan, c.muted))
-                .chain(mixer_cfg.return_channels.iter().map(|r| (r.sink_name.clone(), r.fader, r.pan, r.muted)))
-                .collect();
-            let eq_restart: Vec<(u32, String, Vec<audio::eq::EqBand>)> = mixer_cfg.input_channels.iter()
-                .filter_map(|c| c.eq.as_ref().filter(|e| e.enabled).map(|e| (c.id, c.sink_name.clone(), e.bands.clone())))
-                .collect();
-            let master_levels = (
-                mixer_cfg.master_fader,
-                mixer_cfg.master_pan,
-                mixer_cfg.master_muted,
-            );
-
-            let sends: Vec<(u32, u32, String, String, f32)> = mixer_cfg.sends.iter()
-                .filter_map(|s| {
-                    let inp = mixer_cfg.input_channels.iter().find(|c| c.id == s.input_channel_id)?;
-                    let ret = mixer_cfg.return_channels.iter().find(|r| r.id == s.return_channel_id)?;
-                    Some((inp.id, ret.id, inp.sink_name.clone(), ret.sink_name.clone(), s.level))
-                })
-                .collect();
-
+            // If `audibian --apply-persistent` already ran at session-start (via the
+            // systemd user service), the audibian_* modules already exist; pactl will
+            // create duplicates suffixed `.2`. To avoid that, check for an env var the
+            // systemd unit can set, or skip restoration if the master sink is already
+            // present in the running PipeWire state. For the prototype we rely on
+            // `cleanup_stale_modules()` inside `apply_persistent_state` to wipe any
+            // duplicates before recreating them.
+            let mut mixer_cfg = MixerConfig::load();
+            // Guarantee the soundboard input strip exists before we provision
+            // virtual sinks, so persistent.rs creates `audibian_soundboard`.
+            if mixer_cfg.ensure_soundboard_channel() {
+                mixer_cfg.save();
+            }
+            let soundboard_cfg = soundboard::SoundboardConfig::load();
             let mixer_module_ids = Arc::new(Mutex::new(HashMap::<u32, Vec<u32>>::new()));
             let input_module_ids = Arc::new(Mutex::new(HashMap::<u32, Vec<u32>>::new()));
             let send_module_ids = Arc::new(Mutex::new(HashMap::<(u32, u32), u32>::new()));
@@ -75,7 +95,6 @@ fn main() {
             let master_loopback_module = Arc::new(Mutex::new(None::<u32>));
             let solo_set = Arc::new(Mutex::new(std::collections::HashSet::<String>::new()));
             let strip_eq_instances = Arc::new(Mutex::new(HashMap::<String, audio::strip_eq::StripEqInstance>::new()));
-            let master_hw_sink = mixer_cfg.master_sink.clone();
             {
                 let ret_ids = mixer_module_ids.clone();
                 let inp_ids = input_module_ids.clone();
@@ -84,81 +103,16 @@ fn main() {
                 let m_null = master_null_module.clone();
                 let m_loop = master_loopback_module.clone();
                 let seq_instances = strip_eq_instances.clone();
+                let cfg_clone = mixer_cfg.clone();
                 std::thread::spawn(move || {
-                    commands::cleanup_stale_modules();
-
-                    // Re-create audibian_master null-sink + loopback to the
-                    // persisted hardware sink. Reactive handler links strips
-                    // when the node appears.
-                    if let Some(hw) = &master_hw_sink {
-                        if let Some((nid, lid)) = commands::create_master_modules(hw) {
-                            *m_null.lock().unwrap() = Some(nid);
-                            *m_loop.lock().unwrap() = Some(lid);
-                        }
-                    }
-
-                    // Input virtual channels
-                    for (id, sink_name) in input_channels {
-                        let mut mods = Vec::new();
-                        if let Some(mid) = commands::create_null_sink(&sink_name) {
-                            mods.push(mid);
-                        }
-                        if !mods.is_empty() {
-                            inp_ids.lock().unwrap().insert(id, mods);
-                        }
-                    }
-
-                    // Return buses
-                    for (id, sink_name, display_name) in return_channels {
-                        let mut mods = Vec::new();
-                        if let Some(mid) = commands::create_null_sink(&sink_name) {
-                            mods.push(mid);
-                        }
-                        let src_name = format!("{}_src", sink_name);
-                        let monitor = format!("{}.monitor", sink_name);
-                        if let Some(mid) = commands::create_remap_source(&monitor, &src_name, &display_name) {
-                            mods.push(mid);
-                        }
-                        if !mods.is_empty() {
-                            ret_ids.lock().unwrap().insert(id, mods);
-                        }
-                    }
-
-                    // Loopback sends + source loopbacks — wait for sinks to register
-                    std::thread::sleep(std::time::Duration::from_millis(500));
-                    for (inp_id, ret_id, inp_sink, ret_sink, level) in sends {
-                        let monitor = format!("{}.monitor", inp_sink);
-                        if let Some(mid) = commands::create_loopback(&monitor, &ret_sink) {
-                            if (level - 1.0).abs() > f32::EPSILON {
-                                commands::set_loopback_volume(mid, level);
-                            }
-                            snd_ids.lock().unwrap().insert((inp_id, ret_id), mid);
-                        }
-                    }
-                    for (ch_id, src, sink, mono) in source_channels {
-                        if let Some(mid) = commands::create_source_loopback(&src, &sink, mono) {
-                            src_ids.lock().unwrap().insert(ch_id, mid);
-                        }
-                    }
-
-                    // Push persisted fader+pan+mute to every strip and to master.
-                    for (sink, fader, pan, muted) in strip_levels {
-                        commands::apply_strip_pactl(&sink, fader, pan, muted);
-                    }
-                    let (mf, mp, mm) = master_levels;
-                    commands::apply_strip_pactl(commands::MASTER_SINK_NAME, mf, mp, mm);
-
-                    // Restart any persisted per-strip EQ filter-chains. We don't
-                    // re-link sends here because they were already created above
-                    // from <sink>.monitor; if EQ is enabled the routing will be
-                    // wrong until the user toggles it. TODO: relink here.
-                    let eq_to_restart: Vec<(u32, String, Vec<audio::eq::EqBand>)> = eq_restart;
-                    for (id, sink, bands) in eq_to_restart {
-                        if let Some(inst) = audio::strip_eq::start_strip_eq(&sink, &bands, 48000) {
-                            seq_instances.lock().unwrap()
-                                .insert(commands::strip_key(true, id), inst);
-                        }
-                    }
+                    let restored = persistent::apply_persistent_state(&cfg_clone);
+                    *m_null.lock().unwrap() = restored.master_null_module;
+                    *m_loop.lock().unwrap() = restored.master_loopback_module;
+                    *inp_ids.lock().unwrap() = restored.input_module_ids;
+                    *ret_ids.lock().unwrap() = restored.return_module_ids;
+                    *snd_ids.lock().unwrap() = restored.send_module_ids;
+                    *src_ids.lock().unwrap() = restored.input_source_ids;
+                    *seq_instances.lock().unwrap() = restored.strip_eq_instances;
                 });
             }
 
@@ -181,6 +135,8 @@ fn main() {
                 meter_handles,
                 meter_tx,
                 meter_rx: meter_rx.clone(),
+                soundboard_config: Arc::new(Mutex::new(soundboard_cfg)),
+                soundboard_procs: Arc::new(Mutex::new(Vec::new())),
             };
             app.manage(state);
 
@@ -314,6 +270,14 @@ fn main() {
             commands::set_input_send_to_master,
             commands::save_matrix_connections,
             commands::get_matrix_config,
+            commands::soundboard_list,
+            commands::soundboard_pick_file,
+            commands::soundboard_add,
+            commands::soundboard_remove,
+            commands::soundboard_rename,
+            commands::soundboard_set_trim,
+            commands::soundboard_play,
+            commands::soundboard_stop_all,
         ])
         .run(tauri::generate_context!())
         .expect("error running tauri application");
@@ -332,79 +296,60 @@ fn handle_pw_event(event: PwEvent, graph: &Arc<Mutex<AudioGraph>>, app: &tauri::
                 let state = app.state::<crate::state::AppState>();
                 let mixer_cfg = state.mixer_config.lock().unwrap().clone();
 
-                // 1. Return channel ".monitor" source → start meter
-                let ret_sink_key = mixer_cfg.return_channels.iter()
-                    .find(|r| format!("{}.monitor", r.sink_name) == node.name)
-                    .map(|r| r.sink_name.clone());
-                if let Some(key) = ret_sink_key {
+                // Meters are spawned on the SINK NodeAdded (not on a
+                // `.monitor` source — pipewire native API does not expose
+                // monitor sources as separate nodes; the `<name>.monitor`
+                // entries `pactl` shows are pulse-compat illusions over the
+                // sink's output ports). The meter stream binds via
+                // AUTOCONNECT to the sink's output ports (monitor) and is
+                // NOT passive, so it keeps the null-sink active and pulls
+                // buffers continuously.
+                let meter_key = if node.name == crate::commands::MASTER_SINK_NAME {
+                    Some(crate::commands::MASTER_SINK_NAME.to_string())
+                } else if mixer_cfg.return_channels.iter().any(|r| r.sink_name == node.name) {
+                    Some(node.name.clone())
+                } else if mixer_cfg.input_channels.iter().any(|c| c.sink_name == node.name) {
+                    Some(node.name.clone())
+                } else {
+                    None
+                };
+
+                if let Some(key) = meter_key {
                     let mut handles = state.meter_handles.lock().unwrap();
                     if !handles.contains_key(&key) {
                         if let Some(handle) = crate::meter::spawn_meter(
-                            node.name.clone(), key.clone(), state.meter_tx.clone(),
+                            node.id, key.clone(), state.meter_tx.clone(),
                         ) {
                             handles.insert(key, handle);
                         }
                     }
                 }
 
-                // 2. Input channel sink node appears → start meter on its
-                //    monitor, and (if send_to_master) loopback its output to
-                //    audibian_master.
+                // Input channel sink appears → force-loopback its monitor to
+                // audibian_master so every input always reaches the master.
                 let input_ch = mixer_cfg.input_channels.iter()
                     .find(|c| c.sink_name == node.name)
                     .cloned();
                 if let Some(ch) = input_ch {
-                    let monitor_target = format!("{}.monitor", node.name);
-                    let key = node.name.clone();
-                    let mut handles = state.meter_handles.lock().unwrap();
-                    if !handles.contains_key(&key) {
-                        if let Some(handle) = crate::meter::spawn_meter(
-                            monitor_target, key.clone(), state.meter_tx.clone(),
-                        ) {
-                            handles.insert(key, handle);
-                        }
-                    }
-                    drop(handles);
-
-                    if ch.send_to_master {
-                        let app_clone = app.clone();
-                        let sink_name = ch.sink_name.clone();
-                        std::thread::spawn(move || {
-                            std::thread::sleep(std::time::Duration::from_millis(300));
-                            let state = app_clone.state::<crate::state::AppState>();
-                            let graph = state.graph.lock().unwrap();
-                            crate::commands::connect_nodes(
-                                &graph, &sink_name,
-                                crate::commands::MASTER_SINK_NAME,
-                                &state.pw, false,
-                            );
-                        });
-                    }
+                    let app_clone = app.clone();
+                    let sink_name = ch.sink_name.clone();
+                    std::thread::spawn(move || {
+                        std::thread::sleep(std::time::Duration::from_millis(300));
+                        let state = app_clone.state::<crate::state::AppState>();
+                        let graph = state.graph.lock().unwrap();
+                        crate::commands::connect_nodes(
+                            &graph, &sink_name,
+                            crate::commands::MASTER_SINK_NAME,
+                            &state.pw, false,
+                        );
+                    });
                 }
 
-                // 3. audibian_master.monitor source → start master meter and
-                //    fan-out: link every eligible return + input to the new
-                //    master sink (covers the case where the master is created
-                //    after returns/inputs already exist).
-                if node.name == format!("{}.monitor", crate::commands::MASTER_SINK_NAME) {
-                    let mut handles = state.meter_handles.lock().unwrap();
-                    let key = crate::commands::MASTER_SINK_NAME.to_string();
-                    if !handles.contains_key(&key) {
-                        if let Some(handle) = crate::meter::spawn_meter(
-                            node.name.clone(), key.clone(), state.meter_tx.clone(),
-                        ) {
-                            handles.insert(key, handle);
-                        }
-                    }
-                }
                 if node.name == crate::commands::MASTER_SINK_NAME {
                     let app_clone = app.clone();
-                    let returns: Vec<String> = mixer_cfg.return_channels.iter()
-                        .filter(|r| r.send_to_master)
-                        .map(|r| format!("{}_src", r.sink_name))
-                        .collect();
+                    // Returns NEVER auto-route to master — only inputs do.
+                    let returns: Vec<String> = Vec::new();
                     let inputs: Vec<String> = mixer_cfg.input_channels.iter()
-                        .filter(|c| c.send_to_master)
                         .map(|c| c.sink_name.clone())
                         .collect();
                     std::thread::spawn(move || {
@@ -457,26 +402,8 @@ fn handle_pw_event(event: PwEvent, graph: &Arc<Mutex<AudioGraph>>, app: &tauri::
                     }
                 }
 
-                // 5. Return channel remap-source appears → link to audibian_master
-                //    if its strip has send_to_master enabled.
-                let should_link_to_master = mixer_cfg.return_channels.iter()
-                    .find(|r| format!("{}_src", r.sink_name) == node.name)
-                    .map(|r| r.send_to_master)
-                    .unwrap_or(false);
-                if should_link_to_master {
-                    let app_clone = app.clone();
-                    let src_name = node.name.clone();
-                    std::thread::spawn(move || {
-                        std::thread::sleep(std::time::Duration::from_millis(300));
-                        let state = app_clone.state::<crate::state::AppState>();
-                        let graph = state.graph.lock().unwrap();
-                        crate::commands::connect_nodes(
-                            &graph, &src_name,
-                            crate::commands::MASTER_SINK_NAME,
-                            &state.pw, false,
-                        );
-                    });
-                }
+                // 5. Returns intentionally do NOT auto-route to master. Their
+                //    audio reaches the master only via explicit Matrix links.
             }
 
             // When a node reappears, restore its matrix connections.
@@ -504,6 +431,13 @@ fn handle_pw_event(event: PwEvent, graph: &Arc<Mutex<AudioGraph>>, app: &tauri::
             // when the hw node reappears.
             if let Some(name) = removed_name {
                 let state = app.state::<crate::state::AppState>();
+
+                // Tear down meter pinned to a monitor that just vanished, so
+                // we re-spawn on the new node id when it reappears. Meters
+                // are keyed by the parent sink name (without `.monitor`).
+                let key = name.strip_suffix(".monitor").unwrap_or(name.as_str());
+                state.meter_handles.lock().unwrap().remove(key);
+
                 let master_hw = state.mixer_config.lock().unwrap().master_sink.clone();
                 if master_hw.as_deref() == Some(name.as_str()) {
                     if let Some(mid) = state.master_loopback_module.lock().unwrap().take() {

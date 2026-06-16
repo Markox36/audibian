@@ -6,6 +6,7 @@ use crate::audio::strip_eq::StripEqInstance;
 use crate::profiles::ProfileStore;
 use crate::mixer::MixerConfig;
 use crate::matrix_config::MatrixConfig;
+use crate::soundboard::SoundboardConfig;
 
 pub struct AppState {
     pub graph: Arc<Mutex<AudioGraph>>,
@@ -35,4 +36,9 @@ pub struct AppState {
     pub meter_handles: Arc<Mutex<HashMap<String, crate::meter::MeterHandle>>>,
     pub meter_tx: async_channel::Sender<(String, f32)>,
     pub meter_rx: async_channel::Receiver<(String, f32)>,
+    /// Soundboard: persisted list of uploaded sounds.
+    pub soundboard_config: Arc<Mutex<SoundboardConfig>>,
+    /// Currently playing `paplay` children, one per Play click. Reaped on
+    /// next Play and on Stop-all. Drop kills survivors at process exit.
+    pub soundboard_procs: Arc<Mutex<Vec<std::process::Child>>>,
 }

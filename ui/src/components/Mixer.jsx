@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react'
 import { invoke } from '@tauri-apps/api/core'
 import { listen } from '@tauri-apps/api/event'
-import { Settings, Plus, ZoomIn, Sparkles, X, Activity } from 'lucide-react'
+import { Settings, Plus, ZoomIn, Sparkles, X, Activity, GripVertical } from 'lucide-react'
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -66,6 +66,17 @@ function FaderAndMeter({ value, onChange, db, stereo = false }) {
   const pct = Math.min(1, Math.max(0, value / 150))
   const topPos = (1 - pct) * (faderHeight - handleHeight)
 
+  // Throttled dB readout (every 500ms / ~2 Hz) so the numeric label updates
+  // at a steady, readable rate. Keeps the bar smooth but the text cheap.
+  const [dbDisplay, setDbDisplay] = React.useState(db)
+  const dbRef = React.useRef(db)
+  React.useEffect(() => { dbRef.current = db }, [db])
+  React.useEffect(() => {
+    const id = setInterval(() => setDbDisplay(dbRef.current), 500)
+    return () => clearInterval(id)
+  }, [])
+  const dbText = dbDisplay <= -59.5 ? '-inf' : `${dbDisplay.toFixed(1)}`
+
   const handleMouseDown = (e) => {
     e.preventDefault()
     const startY = e.clientY
@@ -92,7 +103,8 @@ function FaderAndMeter({ value, onChange, db, stereo = false }) {
   const dbPct = Math.max(0, Math.min(100, ((db - dbMin) / (dbMax - dbMin)) * 100))
 
   return (
-    <div className="flex items-stretch justify-between gap-1.5 select-none py-1 h-[126px] px-1 bg-black/30 border border-white/[0.06] rounded-sm">
+    <div className="flex flex-col items-stretch gap-0.5 select-none">
+    <div className="flex items-stretch justify-between gap-1.5 py-1 h-[126px] px-1 bg-black/30 border border-white/[0.06] rounded-sm">
       {/* Fader Track & Thumb */}
       <div
         className="relative w-5 cursor-ns-resize"
@@ -150,6 +162,10 @@ function FaderAndMeter({ value, onChange, db, stereo = false }) {
         <span>-inf</span>
       </div>
     </div>
+    <div className="text-[8px] font-mono font-bold text-neutral-300 text-center bg-black/40 border border-white/[0.06] rounded-sm py-[1px] leading-none">
+      {dbText}<span className="text-neutral-500 ml-0.5">dB</span>
+    </div>
+    </div>
   )
 }
 
@@ -172,7 +188,8 @@ const InputStrip = React.memo(function InputStrip({
   ch, returnChannels, sends, captureNodes, scale,
   faderVal, setFader,
   onRemoveInput, onOpenModal,
-  onDragStart, onDragOver, onDrop,
+  onDragStart, onDragOver, onDragLeave, onDragEnd, onDrop,
+  isDragging, isDragOverTarget,
   soloActive, onSoloToggle,
   armed, onArmToggle,
   db
@@ -193,39 +210,59 @@ const InputStrip = React.memo(function InputStrip({
     invoke('set_strip_mute', { id: ch.id, isInput: true, muted: next }).catch(console.error)
   }
 
+  const dragClasses = isDragging
+    ? 'opacity-20 border-dashed scale-95 z-0'
+    : isDragOverTarget
+    ? 'border-[#4169e1] ring-2 ring-[#4169e1] scale-[1.02] shadow-[0_0_15px_rgba(65,105,225,0.4)] z-10'
+    : ''
+
   return (
     <div
       style={{ width }}
-      onDragOver={e => { e.preventDefault(); onDragOver(e) }}
+      onDragOver={e => onDragOver(e, ch.id, true)}
+      onDragLeave={e => onDragLeave(e, ch.id)}
       onDrop={e => onDrop(e, ch.id, true)}
-      className={`${STRIP_BG} ${STRIP_BORDER} flex flex-col justify-start h-[456px] relative select-none transition-all shrink-0 rounded-sm overflow-hidden`}
+      className={`${STRIP_BG} ${STRIP_BORDER} flex flex-col justify-start h-[456px] relative select-none transition-all duration-200 ease-out shrink-0 rounded-sm overflow-hidden ${dragClasses}`}
     >
       {/* 1. Track Name Header */}
       <div
-        draggable
-        onDragStart={e => onDragStart(e, ch.id, true)}
         style={{ borderTop: `3px solid ${headerColor}` }}
-        className={`h-8 px-1 flex items-center justify-between cursor-grab shrink-0 ${HEADER_BG} ${SECTION_BORDER}`}
+        className={`h-8 px-1.5 flex items-center justify-between gap-1 shrink-0 ${HEADER_BG} ${SECTION_BORDER}`}
       >
+        {/* Drag Handle */}
+        <div
+          draggable
+          onDragStart={e => onDragStart(e, ch.id, true)}
+          onDragEnd={onDragEnd}
+          className="cursor-grab text-neutral-500 hover:text-neutral-300 p-0.5 rounded transition-colors shrink-0"
+          title="Drag to reorder"
+        >
+          <GripVertical className="w-3.5 h-3.5" />
+        </div>
+
+        {/* Name Input */}
         <input
           defaultValue={ch.name}
           key={ch.name}
           onBlur={e => invoke('update_input_channel_name', { id: ch.id, name: e.target.value }).catch(console.error)}
           onMouseDown={e => e.stopPropagation()}
-          className="bg-transparent hover:bg-white/[0.06] border-none font-bold text-[10px] tracking-wide py-0.5 px-1 rounded-sm focus:bg-white/[0.08] text-neutral-100 focus:outline-none text-center w-full min-w-0 font-sans"
+          className="bg-transparent hover:bg-white/[0.06] border-none font-bold text-[10px] tracking-wide py-0.5 px-1 rounded-sm focus:bg-white/[0.08] text-neutral-100 focus:outline-none text-center flex-1 min-w-0 font-sans truncate"
         />
+
+        {/* Configuration Gear */}
+        <button
+          onClick={() => onOpenModal({ id: ch.id, isInput: true, name: ch.name, color: ch.color || headerColor })}
+          className="text-neutral-500 hover:text-neutral-200 p-0.5 rounded transition-colors shrink-0"
+          title="Configure Channel"
+        >
+          <Settings className="w-3.5 h-3.5" />
+        </button>
       </div>
 
-      {/* 2. Drag handle */}
-      <div className={`h-1.5 ${SECTION_ALT_BG} ${SECTION_BORDER} flex items-center justify-center gap-1 shrink-0`}>
-        <span className="w-4 h-[1px] bg-white/20 block" />
-        <span className="w-4 h-[1px] bg-white/20 block" />
-      </div>
-
-      {/* 3. Routing */}
-      <div className={`${SECTION_BG} p-1.5 flex flex-col justify-between h-[105px] ${SECTION_BORDER} text-[8px] font-sans text-neutral-400 shrink-0`}>
+      {/* 3. Routing (Increased height slightly to absorb the removed fake drag handle height) */}
+      <div className={`${SECTION_BG} p-1.5 flex flex-col justify-between h-[111px] ${SECTION_BORDER} text-[8px] font-sans text-neutral-400 shrink-0`}>
         <div>
-          <div className="text-[7px] font-bold text-neutral-500 uppercase tracking-wider mb-0.5 leading-none">Audio From</div>
+          <div className="text-[7px] font-bold text-neutral-500 uppercase tracking-wider mb-0.5 leading-none">Select Input Device</div>
           <select
             value={ch.source_name || ''}
             onChange={e => invoke('set_input_source', { id: ch.id, sourceName: e.target.value || null }).catch(console.error)}
@@ -261,12 +298,13 @@ const InputStrip = React.memo(function InputStrip({
           <button
             onClick={() => invoke('set_input_send_to_master', { id: ch.id, sendToMaster: !ch.send_to_master }).catch(console.error)}
             className={`flex-1 py-0.5 text-[8px] font-bold border rounded-sm uppercase transition-colors ${
-              ch.send_to_master
-                ? 'bg-[#4169e1]/25 text-[#9ab2ec] border-[#4169e1]/60'
+              !ch.send_to_master
+                ? 'bg-[#df4c55]/25 text-[#f59e9b] border-[#df4c55]/60 shadow-[0_1px_3px_rgba(223,76,85,0.15)]'
                 : 'bg-white/[0.04] text-neutral-400 border-white/[0.06] hover:bg-white/[0.08]'
             }`}
+            title={ch.send_to_master ? 'Mute to Master' : 'Unmute to Master'}
           >
-            Master
+            Mute M.
           </button>
         </div>
       </div>
@@ -313,13 +351,13 @@ const InputStrip = React.memo(function InputStrip({
           value={faderVal}
           onChange={v => {
             setFader(faderKey, v)
-            invoke('set_volume', { nodeName: ch.sink_name, volume: v / 100 }).catch(console.error)
+            invoke('set_strip_volume', { id: ch.id, isInput: true, volume: v / 100 }).catch(console.error)
           }}
           db={db}
         />
       </div>
 
-      {/* 6. Mute / Solo / Arm + Setup */}
+      {/* 6. Mute / Solo + Setup */}
       <div className="p-1.5 flex flex-col justify-between bg-white/[0.03] h-[88px] shrink-0">
         <div className="flex items-center gap-1 justify-center w-full">
           <button
@@ -336,7 +374,7 @@ const InputStrip = React.memo(function InputStrip({
 
           <button
             onClick={() => onSoloToggle(ch.id, true)}
-            className={`w-[28px] h-[28px] rounded-sm text-[10px] font-black flex items-center justify-center transition-colors border ${
+            className={`w-[36px] h-[28px] rounded-sm text-[10px] font-black flex items-center justify-center transition-colors border ${
               soloActive
                 ? 'bg-[#f5b94a] text-black border-[#d99e2c]'
                 : 'bg-black/40 text-neutral-600 border-white/[0.06] hover:text-neutral-300'
@@ -345,36 +383,15 @@ const InputStrip = React.memo(function InputStrip({
           >
             S
           </button>
-
-          <button
-            onClick={() => onArmToggle(ch.id)}
-            className={`w-[28px] h-[28px] rounded-sm flex items-center justify-center transition-colors border ${
-              armed
-                ? 'bg-[#df4c55] text-white border-[#a93640]'
-                : 'bg-black/40 text-neutral-600 border-white/[0.06] hover:text-neutral-300'
-            }`}
-            title="Record Arm"
-          >
-            <span className="text-[10px] leading-none select-none">●</span>
-          </button>
         </div>
 
-        <div className="flex items-center gap-1 w-full shrink-0">
-          <button
-            onClick={() => onOpenModal({ id: ch.id, isInput: true, name: ch.name, color: ch.color || headerColor })}
-            className="flex-1 h-[25px] bg-white/[0.04] border border-white/[0.06] hover:bg-white/[0.08] text-neutral-400 hover:text-white rounded-sm flex items-center justify-center gap-1 transition-colors text-[8.5px] font-bold uppercase tracking-wider"
-            title="Configure Channel"
-          >
-            <Settings className="w-3 h-3" />
-            Setup
-          </button>
-
+        <div className="flex items-center w-full shrink-0">
           <button
             onClick={() => onRemoveInput(ch.id)}
-            className="w-7 h-[25px] bg-white/[0.04] border border-white/[0.06] hover:bg-[#df4c55]/15 hover:border-[#df4c55]/60 hover:text-[#df4c55] text-neutral-500 rounded-sm flex items-center justify-center transition-colors text-xs font-bold"
+            className="w-full h-[25px] bg-white/[0.04] border border-white/[0.06] hover:bg-[#df4c55]/15 hover:border-[#df4c55]/60 hover:text-[#df4c55] text-neutral-500 rounded-sm flex items-center justify-center transition-colors text-[8.5px] font-bold uppercase tracking-wider"
             title="Remove Channel"
           >
-            ×
+            Remove Channel
           </button>
         </div>
       </div>
@@ -390,7 +407,8 @@ const ReturnStrip = React.memo(function ReturnStrip({
   ret, scale,
   faderVal, setFader,
   onRemoveReturn, onOpenModal, onReload,
-  onDragStart, onDragOver, onDrop,
+  onDragStart, onDragOver, onDragLeave, onDragEnd, onDrop,
+  isDragging, isDragOverTarget,
   soloActive, onSoloToggle,
   db,
   letter
@@ -411,37 +429,57 @@ const ReturnStrip = React.memo(function ReturnStrip({
     invoke('set_strip_mute', { id: ret.id, isInput: false, muted: next }).catch(console.error)
   }
 
+  const dragClasses = isDragging
+    ? 'opacity-20 border-dashed scale-95 z-0'
+    : isDragOverTarget
+    ? 'border-[#4169e1] ring-2 ring-[#4169e1] scale-[1.02] shadow-[0_0_15px_rgba(65,105,225,0.4)] z-10'
+    : ''
+
   return (
     <div
       style={{ width }}
-      onDragOver={e => { e.preventDefault(); onDragOver(e) }}
+      onDragOver={e => onDragOver(e, ret.id, false)}
+      onDragLeave={e => onDragLeave(e, ret.id)}
       onDrop={e => onDrop(e, ret.id, false)}
-      className={`${STRIP_BG} ${STRIP_BORDER} flex flex-col justify-start h-[456px] relative select-none transition-all shrink-0 rounded-sm overflow-hidden`}
+      className={`${STRIP_BG} ${STRIP_BORDER} flex flex-col justify-start h-[456px] relative select-none transition-all duration-200 ease-out shrink-0 rounded-sm overflow-hidden ${dragClasses}`}
     >
       {/* 1. Track Name Header */}
       <div
-        draggable
-        onDragStart={e => onDragStart(e, ret.id, false)}
         style={{ borderTop: `3px solid ${headerColor}` }}
-        className={`h-8 px-1 flex items-center justify-between cursor-grab shrink-0 ${HEADER_BG} ${SECTION_BORDER}`}
+        className={`h-8 px-1.5 flex items-center justify-between gap-1 shrink-0 ${HEADER_BG} ${SECTION_BORDER}`}
       >
+        {/* Drag Handle */}
+        <div
+          draggable
+          onDragStart={e => onDragStart(e, ret.id, false)}
+          onDragEnd={onDragEnd}
+          className="cursor-grab text-neutral-500 hover:text-neutral-300 p-0.5 rounded transition-colors shrink-0"
+          title="Drag to reorder"
+        >
+          <GripVertical className="w-3.5 h-3.5" />
+        </div>
+
+        {/* Name Input */}
         <input
           defaultValue={ret.name}
           key={ret.name}
           onBlur={e => invoke('update_return_channel_name', { id: ret.id, name: e.target.value }).catch(console.error)}
           onMouseDown={e => e.stopPropagation()}
-          className="bg-transparent hover:bg-white/[0.06] border-none font-bold text-[10px] tracking-wide py-0.5 px-1 rounded-sm focus:bg-white/[0.08] text-neutral-100 focus:outline-none text-center w-full min-w-0 font-sans"
+          className="bg-transparent hover:bg-white/[0.06] border-none font-bold text-[10px] tracking-wide py-0.5 px-1 rounded-sm focus:bg-white/[0.08] text-neutral-100 focus:outline-none text-center flex-1 min-w-0 font-sans truncate"
         />
+
+        {/* Configuration Gear */}
+        <button
+          onClick={() => onOpenModal({ id: ret.id, isInput: false, name: ret.name, color: ret.color || headerColor })}
+          className="text-neutral-500 hover:text-neutral-200 p-0.5 rounded transition-colors shrink-0"
+          title="Configure Channel"
+        >
+          <Settings className="w-3.5 h-3.5" />
+        </button>
       </div>
 
-      {/* 2. Drag handle */}
-      <div className={`h-1.5 ${SECTION_ALT_BG} ${SECTION_BORDER} flex items-center justify-center gap-1 shrink-0`}>
-        <span className="w-4 h-[1px] bg-white/20 block" />
-        <span className="w-4 h-[1px] bg-white/20 block" />
-      </div>
-
-      {/* 3. Routing */}
-      <div className={`${SECTION_BG} p-1.5 flex flex-col justify-between h-[105px] ${SECTION_BORDER} text-[8px] font-sans text-neutral-400 shrink-0`}>
+      {/* 3. Routing (Increased height slightly to absorb the removed fake drag handle height) */}
+      <div className={`${SECTION_BG} p-1.5 flex flex-col justify-between h-[111px] ${SECTION_BORDER} text-[8px] font-sans text-neutral-400 shrink-0`}>
         <div>
           <div className="text-[7px] font-bold text-neutral-500 uppercase tracking-wider mb-0.5 leading-none">Return Bus</div>
           <div className="w-full bg-black/40 border border-white/[0.06] text-[8px] text-neutral-400 font-mono py-0.5 px-1 rounded-sm truncate leading-tight text-center">
@@ -452,26 +490,8 @@ const ReturnStrip = React.memo(function ReturnStrip({
         <div>
           <div className="text-[7px] font-bold text-neutral-500 uppercase tracking-wider mb-0.5 leading-none">Audio To</div>
           <div className="w-full bg-white/[0.05] border border-white/[0.06] text-[8px] text-neutral-300 font-mono py-0.5 px-1 rounded-sm truncate text-center">
-            Master Out
+            Matrix Only
           </div>
-        </div>
-
-        <div className="flex items-center gap-1.5 shrink-0">
-          <button
-            onClick={() => {
-              const next = !ret.send_to_master
-              invoke('set_return_send_to_master', { id: ret.id, sendToMaster: next })
-                .then(onReload)
-                .catch(console.error)
-            }}
-            className={`w-full py-0.5 text-[8px] font-bold border rounded-sm uppercase transition-colors ${
-              ret.send_to_master
-                ? 'bg-[#4169e1]/25 text-[#9ab2ec] border-[#4169e1]/60'
-                : 'bg-white/[0.04] text-neutral-400 border-white/[0.06] hover:bg-white/[0.08]'
-            }`}
-          >
-            {ret.send_to_master ? '→ Master' : '⊘ Capture'}
-          </button>
         </div>
       </div>
 
@@ -495,7 +515,7 @@ const ReturnStrip = React.memo(function ReturnStrip({
           value={faderVal}
           onChange={v => {
             setFader(faderKey, v)
-            invoke('set_volume', { nodeName: ret.sink_name, volume: v / 100 }).catch(console.error)
+            invoke('set_strip_volume', { id: ret.id, isInput: false, volume: v / 100 }).catch(console.error)
           }}
           db={db}
         />
@@ -529,22 +549,13 @@ const ReturnStrip = React.memo(function ReturnStrip({
           </button>
         </div>
 
-        <div className="flex items-center gap-1 w-full shrink-0">
-          <button
-            onClick={() => onOpenModal({ id: ret.id, isInput: false, name: ret.name, color: ret.color || headerColor })}
-            className="flex-1 h-[25px] bg-white/[0.04] border border-white/[0.06] hover:bg-white/[0.08] text-neutral-400 hover:text-white rounded-sm flex items-center justify-center gap-1 transition-colors text-[8.5px] font-bold uppercase tracking-wider"
-            title="Configure Channel"
-          >
-            <Settings className="w-3 h-3" />
-            Setup
-          </button>
-
+        <div className="flex items-center w-full shrink-0">
           <button
             onClick={() => onRemoveReturn(ret.id)}
-            className="w-7 h-[25px] bg-white/[0.04] border border-white/[0.06] hover:bg-[#df4c55]/15 hover:border-[#df4c55]/60 hover:text-[#df4c55] text-neutral-500 rounded-sm flex items-center justify-center transition-colors text-xs font-bold"
+            className="w-full h-[25px] bg-white/[0.04] border border-white/[0.06] hover:bg-[#df4c55]/15 hover:border-[#df4c55]/60 hover:text-[#df4c55] text-neutral-500 rounded-sm flex items-center justify-center transition-colors text-[8.5px] font-bold uppercase tracking-wider"
             title="Remove Return"
           >
-            ×
+            Remove Return
           </button>
         </div>
       </div>
@@ -587,14 +598,8 @@ const MasterStrip = React.memo(function MasterStrip({
         <span className="font-bold text-[#4169e1] text-[10px] tracking-[0.15em] uppercase">Master</span>
       </div>
 
-      {/* 2. Drag handle */}
-      <div className={`h-1.5 ${SECTION_ALT_BG} ${SECTION_BORDER} flex items-center justify-center gap-1 shrink-0`}>
-        <span className="w-4 h-[1px] bg-white/20 block" />
-        <span className="w-4 h-[1px] bg-white/20 block" />
-      </div>
-
-      {/* 3. Routing */}
-      <div className={`${SECTION_BG} p-1.5 flex flex-col justify-between h-[105px] ${SECTION_BORDER} text-[8px] font-sans text-neutral-400 shrink-0`}>
+      {/* 3. Routing (Increased height slightly to absorb the removed fake drag handle height) */}
+      <div className={`${SECTION_BG} p-1.5 flex flex-col justify-between h-[111px] ${SECTION_BORDER} text-[8px] font-sans text-neutral-400 shrink-0`}>
         <div>
           <div className="text-[7px] font-bold text-neutral-500 uppercase tracking-wider mb-0.5 leading-none">Output To</div>
           <select
@@ -646,9 +651,7 @@ const MasterStrip = React.memo(function MasterStrip({
           value={faderVal}
           onChange={v => {
             setFader('master', v)
-            if (masterSink) {
-              invoke('set_volume', { nodeName: masterSink, volume: v / 100 }).catch(console.error)
-            }
+            invoke('set_master_volume', { volume: v / 100 }).catch(console.error)
           }}
           db={db}
           stereo
@@ -737,15 +740,23 @@ function ConfigModal({ modal, onSave, onCancel }) {
                 className="h-8 w-12 bg-transparent border border-white/[0.08] rounded-md cursor-pointer p-0.5"
               />
               <span className="text-xs font-mono text-neutral-400 uppercase">{localModal.color || '#4169e1'}</span>
-              <div className="flex gap-1 ml-auto">
-                {DESIGNER_COLORS.slice(0, 8).map(c => (
-                  <button
-                    key={c}
-                    onClick={() => setLocalModal({ ...localModal, color: c })}
-                    style={{ backgroundColor: c }}
-                    className="w-4 h-4 rounded-sm border border-white/20 hover:scale-110 transition-transform"
-                  />
-                ))}
+              <div className="flex gap-1.5 ml-auto">
+                {DESIGNER_COLORS.slice(0, 8).map(c => {
+                  const isActive = (localModal.color || '#4169e1').toLowerCase() === c.toLowerCase()
+                  return (
+                    <button
+                      key={c}
+                      onClick={() => setLocalModal({ ...localModal, color: c })}
+                      style={{ backgroundColor: c }}
+                      className={`w-6 h-6 rounded-full border transition-all ${
+                        isActive
+                          ? 'border-white scale-110 ring-2 ring-[#4169e1] ring-offset-2 ring-offset-neutral-900 shadow-md'
+                          : 'border-white/10 hover:border-white/30 hover:scale-105'
+                      }`}
+                      title={c}
+                    />
+                  )
+                })}
               </div>
             </div>
           </div>
@@ -794,10 +805,36 @@ export default function Mixer({ graph }) {
   const [armedChannels, setArmedChannels] = useState(new Set())
   const [cpuLoad, setCpuLoad] = useState(8)
 
+  const [draggedInfo, setDraggedInfo] = useState(null) // { id, isInput }
+  const [dragOverId, setDragOverId] = useState(null)
+
   const loadConfig = () => {
     invoke('get_mixer_config').then(cfg => {
       setConfig(cfg)
       setScale(cfg.global_scale ?? 1.0)
+      // Seed fader UI values from persisted config (fader is stored as
+      // 0..4 in toml; UI works in 0..150 where 100 = unity). Only fill
+      // keys that don't already have a value so an in-flight drag isn't
+      // snapped back when get_mixer_config returns.
+      setFaderValues(prev => {
+        const next = { ...prev }
+        for (const c of cfg.input_channels || []) {
+          const k = `in-${c.id}`
+          if (next[k] === undefined && typeof c.fader === 'number') {
+            next[k] = c.fader * 100
+          }
+        }
+        for (const r of cfg.return_channels || []) {
+          const k = `ret-${r.id}`
+          if (next[k] === undefined && typeof r.fader === 'number') {
+            next[k] = r.fader * 100
+          }
+        }
+        if (next.master === undefined && typeof cfg.master_fader === 'number') {
+          next.master = cfg.master_fader * 100
+        }
+        return next
+      })
       setLoading(false)
     }).catch(console.error)
 
@@ -908,16 +945,36 @@ export default function Mixer({ graph }) {
     await invoke('set_global_scale', { scale: s }).catch(console.error)
   }
 
-  const handleDragStart = (e, id, isInput) => {
+  const handleDragStart = useCallback((e, id, isInput) => {
     e.dataTransfer.setData('channelId', id)
     e.dataTransfer.setData('isInput', isInput ? '1' : '0')
-  }
+    setDraggedInfo({ id, isInput })
+  }, [])
 
-  const handleDragOver = (e) => { e.preventDefault() }
+  const handleDragEnd = useCallback(() => {
+    setDraggedInfo(null)
+    setDragOverId(null)
+  }, [])
 
-  const handleDrop = async (e, targetId, targetIsInput) => {
+  const handleDragOver = useCallback((e, id, isInput) => {
+    e.preventDefault()
+    setDraggedInfo(currDragged => {
+      if (currDragged && currDragged.isInput === isInput && currDragged.id !== id) {
+        setDragOverId(id)
+      }
+      return currDragged
+    })
+  }, [])
+
+  const handleDragLeave = useCallback((e, id) => {
+    setDragOverId(currOver => (currOver === id ? null : currOver))
+  }, [])
+
+  const handleDrop = useCallback(async (e, targetId, targetIsInput) => {
     const draggedId = parseInt(e.dataTransfer.getData('channelId'))
     const draggedIsInput = e.dataTransfer.getData('isInput') === '1'
+    setDraggedInfo(null)
+    setDragOverId(null)
     if (draggedId === targetId) return
     if (draggedIsInput !== targetIsInput) return
 
@@ -948,7 +1005,7 @@ export default function Mixer({ graph }) {
 
     await invoke('reorder_channels', { inputOrder, returnOrder }).catch(console.error)
     loadConfig()
-  }
+  }, [config.input_channels, config.return_channels, loadConfig])
 
   const saveModal = async (updated) => {
     if (updated.isInput) {
@@ -993,9 +1050,11 @@ export default function Mixer({ graph }) {
     [config.return_channels]
   )
 
-  const stableHandleDragStart = useCallback(handleDragStart, [])
-  const stableHandleDragOver  = useCallback(handleDragOver,  [])
-  const stableHandleDrop      = useCallback(handleDrop,      [config.input_channels, config.return_channels])
+  const stableHandleDragStart = handleDragStart
+  const stableHandleDragOver  = handleDragOver
+  const stableHandleDragLeave = handleDragLeave
+  const stableHandleDragEnd   = handleDragEnd
+  const stableHandleDrop      = handleDrop
   const stableSetModal        = useCallback(setModal, [])
   const stableLoadConfig      = useCallback(loadConfig, [])
 
@@ -1073,76 +1132,107 @@ export default function Mixer({ graph }) {
 
       {/* ─── Mixer Strips ─── */}
       <div className="flex-1 overflow-x-auto overflow-y-hidden p-3 bg-[#171717] scrollbar-thin scrollbar-thumb-white/10">
-        <div className="flex h-full items-start pb-1">
+        <div className="flex h-full items-start pb-1 w-full justify-between gap-6 min-w-max">
 
-          {/* Inputs */}
-          {sortedInputs.length > 0 && (
-            <div className="flex items-start h-full bg-black/20 rounded-md border border-white/[0.04] p-1 mr-2">
-              {sortedInputs.map(ch => (
-                <InputStrip
-                  key={ch.id}
-                  ch={ch}
-                  returnChannels={sortedReturns}
-                  sends={config.sends}
-                  captureNodes={captureNodes}
-                  scale={scale}
-                  faderVal={getFader(`in-${ch.id}`)}
-                  setFader={setFader}
-                  onRemoveInput={removeInput}
-                  onOpenModal={stableSetModal}
-                  onDragStart={stableHandleDragStart}
-                  onDragOver={stableHandleDragOver}
-                  onDrop={stableHandleDrop}
-                  soloActive={soloSet.has(`in-${ch.id}`)}
-                  onSoloToggle={handleSoloToggle}
-                  armed={armedChannels.has(ch.id)}
-                  onArmToggle={handleArmToggle}
-                  db={peaks[ch.sink_name] ?? -60}
-                />
-              ))}
-            </div>
-          )}
-
-          {/* Returns */}
-          {sortedReturns.length > 0 && (
-            <div className="flex items-start h-full bg-black/20 rounded-md border border-white/[0.04] p-1 mr-2">
-              {sortedReturns.map((ret, idx) => {
-                const letter = String.fromCharCode(65 + idx)
-                return (
-                  <ReturnStrip
-                    key={ret.id}
-                    ret={ret}
+          {/* Inputs Section */}
+          {sortedInputs.length > 0 ? (
+            <div className="flex flex-col h-full shrink-0">
+              <div className="text-[9px] font-black uppercase tracking-[0.2em] text-neutral-500 mb-2 px-1 select-none border-b border-white/[0.04] pb-1 shrink-0">
+                Inputs / Entradas
+              </div>
+              <div className="flex items-start flex-1 bg-black/20 rounded-md border border-white/[0.04] p-1">
+                {sortedInputs.map(ch => (
+                  <InputStrip
+                    key={ch.id}
+                    ch={ch}
+                    returnChannels={sortedReturns}
+                    sends={config.sends}
+                    captureNodes={captureNodes}
                     scale={scale}
-                    faderVal={getFader(`ret-${ret.id}`)}
+                    faderVal={getFader(`in-${ch.id}`)}
                     setFader={setFader}
-                    onRemoveReturn={removeReturn}
+                    onRemoveInput={removeInput}
                     onOpenModal={stableSetModal}
-                    onReload={stableLoadConfig}
                     onDragStart={stableHandleDragStart}
                     onDragOver={stableHandleDragOver}
+                    onDragLeave={stableHandleDragLeave}
+                    onDragEnd={stableHandleDragEnd}
                     onDrop={stableHandleDrop}
-                    soloActive={soloSet.has(`ret-${ret.id}`)}
+                    isDragging={draggedInfo && draggedInfo.id === ch.id && draggedInfo.isInput === true}
+                    isDragOverTarget={dragOverId === ch.id}
+                    soloActive={soloSet.has(`in-${ch.id}`)}
                     onSoloToggle={handleSoloToggle}
-                    letter={letter}
-                    db={peaks[ret.sink_name] ?? -60}
+                    armed={armedChannels.has(ch.id)}
+                    onArmToggle={handleArmToggle}
+                    db={peaks[ch.sink_name] ?? -60}
                   />
-                )
-              })}
+                ))}
+              </div>
             </div>
+          ) : (
+            <div className="shrink-0" />
           )}
 
-          {/* Master */}
-          <div className="h-full shrink-0 bg-[#4169e1]/[0.04] rounded-md border border-[#4169e1]/20 p-1">
-            <MasterStrip
-              masterSink={config.master_sink}
-              masterMuted={config.master_muted}
-              sinkNodes={sinkNodes}
-              scale={scale}
-              faderVal={getFader('master')}
-              setFader={setFader}
-              db={config.master_sink ? (peaks[config.master_sink] ?? -60) : -60}
-            />
-          </div>
+          {/* Returns & Master Section (Pinned to the right) */}
+          {(sortedReturns.length > 0 || config.master_sink !== null || true) && (
+            <div className="flex items-start gap-4 h-full ml-auto shrink-0">
+              
+              {/* Returns */}
+              {sortedReturns.length > 0 && (
+                <div className="flex flex-col h-full shrink-0">
+                  <div className="text-[9px] font-black uppercase tracking-[0.2em] text-neutral-500 mb-2 px-1 select-none border-b border-white/[0.04] pb-1 shrink-0">
+                    Returns / Retornos
+                  </div>
+                  <div className="flex items-start flex-1 bg-black/20 rounded-md border border-white/[0.04] p-1">
+                    {sortedReturns.map((ret, idx) => {
+                      const letter = String.fromCharCode(65 + idx)
+                      return (
+                        <ReturnStrip
+                          key={ret.id}
+                          ret={ret}
+                          scale={scale}
+                          faderVal={getFader(`ret-${ret.id}`)}
+                          setFader={setFader}
+                          onRemoveReturn={removeReturn}
+                          onOpenModal={stableSetModal}
+                          onReload={stableLoadConfig}
+                          onDragStart={stableHandleDragStart}
+                          onDragOver={stableHandleDragOver}
+                          onDragLeave={stableHandleDragLeave}
+                          onDragEnd={stableHandleDragEnd}
+                          onDrop={stableHandleDrop}
+                          isDragging={draggedInfo && draggedInfo.id === ret.id && draggedInfo.isInput === false}
+                          isDragOverTarget={dragOverId === ret.id}
+                          soloActive={soloSet.has(`ret-${ret.id}`)}
+                          onSoloToggle={handleSoloToggle}
+                          letter={letter}
+                          db={peaks[ret.sink_name] ?? -60}
+                        />
+                      )
+                    })}
+                  </div>
+                </div>
+              )}
+
+              {/* Master */}
+              <div className="flex flex-col h-full shrink-0">
+                <div className="text-[9px] font-black uppercase tracking-[0.2em] text-[#4169e1] mb-2 px-1 select-none border-b border-[#4169e1]/10 pb-1 shrink-0">
+                  Master / Maestro
+                </div>
+                <div className="flex-1 shrink-0 bg-[#4169e1]/[0.04] rounded-md border border-[#4169e1]/20 p-1">
+                  <MasterStrip
+                    masterSink={config.master_sink}
+                    masterMuted={config.master_muted}
+                    sinkNodes={sinkNodes}
+                    scale={scale}
+                    faderVal={getFader('master')}
+                    setFader={setFader}
+                    db={peaks['audibian_master'] ?? -60}
+                  />
+                </div>
+              </div>
+            </div>
+          )}
 
           {/* Empty state */}
           {sortedInputs.length === 0 && sortedReturns.length === 0 && (

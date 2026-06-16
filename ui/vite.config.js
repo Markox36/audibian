@@ -5,6 +5,10 @@ export default defineConfig({
   plugins: [react()],
   clearScreen: false,
   server: {
+    // Force IPv4. Vite's default on dual-stack hosts binds only to
+    // `[::1]:5173`; tauri's webview resolves `localhost` IPv4-first
+    // and gets "Connection refused" even though vite is up.
+    host: '127.0.0.1',
     port: 5173,
     strictPort: true,
   },

@@ -39,10 +39,12 @@ struct UserData {
 }
 
 /// Spawn a native PipeWire capture stream for metering.
-/// `target`    — PipeWire node name to connect to (e.g. "foo.monitor")
+/// `target_id` — PipeWire node id to connect to (deterministic; avoids
+///               wireplumber falling back to the default capture device when
+///               a target name lookup races node creation).
 /// `event_key` — key emitted with pw-node-peak events
 pub fn spawn_meter(
-    target: String,
+    target_id: u32,
     event_key: String,
     tx: async_channel::Sender<(String, f32)>,
 ) -> Option<MeterHandle> {
@@ -51,14 +53,14 @@ pub fn spawn_meter(
 
     let thread = std::thread::Builder::new()
         .name(format!("meter-{}", event_key))
-        .spawn(move || run_meter(target, event_key, tx, stop_clone))
+        .spawn(move || run_meter(target_id, event_key, tx, stop_clone))
         .ok()?;
 
     Some(MeterHandle { stop, _thread: thread })
 }
 
 fn run_meter(
-    target: String,
+    target_id: u32,
     event_key: String,
     tx: async_channel::Sender<(String, f32)>,
     stop: Arc<AtomicBool>,
@@ -76,11 +78,21 @@ fn run_meter(
         Err(e) => { debug!("meter {}: connect: {e}", event_key); return; }
     };
 
+    let node_name = format!("audibian-meter-{}", event_key);
     let props = properties! {
         *pipewire::keys::MEDIA_TYPE      => "Audio",
         *pipewire::keys::MEDIA_CATEGORY  => "Capture",
         *pipewire::keys::MEDIA_ROLE      => "Music",
-        *pipewire::keys::TARGET_OBJECT   => target.as_str(),
+        // Set node + app name explicitly. Otherwise PipeWire defaults
+        // node.name to the binary name ("audibian"), which produces one
+        // anonymous "audibian" entry per strip in the Matrix view.
+        *pipewire::keys::NODE_NAME       => node_name.as_str(),
+        *pipewire::keys::APP_NAME        => "audibian-meter",
+        // Crucially: NOT passive — a passive stream lets PipeWire suspend
+        // its target node when nothing else holds it active. Null-sinks
+        // with only matrix port-links go SUSPENDED → no buffers reach the
+        // meter → dB sticks at -inf. Active capture keeps the sink running.
+        "node.dont-reconnect" => "true",
     };
 
     let stream = match StreamBox::new(&core, &format!("audibian-meter-{}", event_key), props) {
@@ -180,7 +192,7 @@ fn run_meter(
 
     if let Err(e) = stream.connect(
         Direction::Input,
-        None,
+        Some(target_id),
         StreamFlags::AUTOCONNECT | StreamFlags::MAP_BUFFERS | StreamFlags::RT_PROCESS,
         &mut params,
     ) {

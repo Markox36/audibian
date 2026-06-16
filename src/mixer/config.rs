@@ -46,6 +46,11 @@ pub struct InputChannel {
     pub is_default: bool,
     #[serde(default)]
     pub eq: Option<StripEq>,
+    /// Marks the soundboard strip. Auto-provisioned at startup, cannot be
+    /// removed via UI. Plays uploaded sounds through this dedicated sink so
+    /// the user can route every soundboard sound from one mixer strip.
+    #[serde(default)]
+    pub is_soundboard: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -154,6 +159,41 @@ impl MixerConfig {
         let id = self.next_id;
         self.next_id += 1;
         id
+    }
+
+    /// Ensures a single soundboard input strip exists. Called on startup so
+    /// `audibian_soundboard` is always present in the Mixer regardless of
+    /// previous config state. Returns true if a new entry was added.
+    pub fn ensure_soundboard_channel(&mut self) -> bool {
+        let sink = crate::soundboard::SOUNDBOARD_SINK_NAME;
+        if self.input_channels.iter().any(|c| c.is_soundboard || c.sink_name == sink) {
+            // Make sure the flag is set on the existing entry so the UI can
+            // hide the remove button.
+            if let Some(c) = self.input_channels.iter_mut().find(|c| c.sink_name == sink) {
+                c.is_soundboard = true;
+            }
+            return false;
+        }
+        let id = self.next_channel_id();
+        let order = self.input_channels.len() as u32;
+        self.input_channels.push(InputChannel {
+            id,
+            name: "Soundboard".to_string(),
+            sink_name: sink.to_string(),
+            order,
+            color: Some("#a18c47".to_string()),
+            source_name: None,
+            mono: false,
+            send_to_master: true,
+            pan: 0.0,
+            fader: 1.0,
+            muted: false,
+            app_match_rules: Vec::new(),
+            is_default: false,
+            eq: None,
+            is_soundboard: true,
+        });
+        true
     }
 
     pub fn has_send(&self, input_id: u32, return_id: u32) -> bool {

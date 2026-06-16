@@ -7,6 +7,7 @@ use crate::audio::{AudioGraph, PwCommand, PwThread};
 use crate::mixer::{InputChannel, ReturnChannel};
 use crate::profiles::model::AudioProfile;
 use crate::profiles::AppConfig;
+use crate::soundboard::{Sound, SoundboardConfig, SOUNDBOARD_SINK_NAME};
 use crate::state::AppState;
 
 // ---------------------------------------------------------------------------
@@ -246,6 +247,7 @@ pub fn add_input_channel(state: State<AppState>, name: String) {
             app_match_rules: Vec::new(),
             is_default: false,
             eq: None,
+            is_soundboard: false,
         });
         cfg.save();
         let channels = cfg.input_channels.clone();
@@ -279,7 +281,7 @@ pub fn add_return_channel(state: State<AppState>, name: Option<String>) {
             sink_name: sink_name.clone(),
             order,
             color: None,
-            send_to_master: true,
+            send_to_master: false,
             pan: 0.0,
             fader: 1.0,
             muted: false,
@@ -308,6 +310,15 @@ pub fn add_return_channel(state: State<AppState>, name: Option<String>) {
 
 #[tauri::command]
 pub fn remove_input_channel(state: State<AppState>, id: u32) {
+    // Refuse to delete the soundboard strip — it is auto-provisioned at
+    // startup and removing it would break soundboard playback routing.
+    {
+        let cfg = state.mixer_config.lock().unwrap();
+        if cfg.input_channels.iter().any(|c| c.id == id && c.is_soundboard) {
+            return;
+        }
+    }
+
     // Unload source loopback if any
     if let Some(mid) = state.input_source_ids.lock().unwrap().remove(&id) {
         let _ = std::process::Command::new("pactl")
@@ -706,11 +717,13 @@ pub fn set_input_mono(state: State<AppState>, id: u32, mono: bool) {
 }
 
 #[tauri::command]
-pub fn set_return_send_to_master(state: State<AppState>, id: u32, send_to_master: bool) {
+pub fn set_return_send_to_master(state: State<AppState>, id: u32, _send_to_master: bool) {
+    // Returns are not allowed to route to the master bus. Keep the flag off
+    // in config and tear down any stale loopback if one exists.
     let sink_name = {
         let mut cfg = state.mixer_config.lock().unwrap();
         if let Some(r) = cfg.return_channels.iter_mut().find(|r| r.id == id) {
-            r.send_to_master = send_to_master;
+            r.send_to_master = false;
         }
         cfg.save();
         cfg.return_channels.iter().find(|r| r.id == id).map(|r| r.sink_name.clone())
@@ -719,11 +732,7 @@ pub fn set_return_send_to_master(state: State<AppState>, id: u32, send_to_master
     if let Some(sink) = sink_name {
         let src_name = format!("{}_src", sink);
         let graph = state.graph.lock().unwrap();
-        if send_to_master {
-            connect_nodes(&graph, &src_name, MASTER_SINK_NAME, &state.pw, false);
-        } else {
-            disconnect_nodes(&graph, &src_name, MASTER_SINK_NAME, &state.pw);
-        }
+        disconnect_nodes(&graph, &src_name, MASTER_SINK_NAME, &state.pw);
     }
 }
 
@@ -1136,6 +1145,46 @@ pub fn cleanup_stale_modules() {
             }
         }
     }
+
+    // Give pactl a moment to tear nodes down before scanning for orphans.
+    std::thread::sleep(std::time::Duration::from_millis(150));
+
+    // Destroy any remaining `audibian_*` PipeWire nodes that no module owns.
+    // These come from legacy static `~/.config/pipewire/pipewire.conf.d/
+    // audibian-inputs.conf` drop-ins: they survive `unload-module` because
+    // pipewire created them directly from context.objects, not via pactl.
+    // Apps then resolve the `audibian_*` name to the lowest-id ghost and
+    // audio dead-ends there because matrix links only target the runtime
+    // sinks we just recreated.
+    destroy_orphan_audibian_nodes();
+}
+
+fn destroy_orphan_audibian_nodes() {
+    let Ok(out) = std::process::Command::new("pw-cli")
+        .args(["ls", "Node"])
+        .output()
+    else { return };
+    let txt = String::from_utf8_lossy(&out.stdout);
+
+    let mut current_id: Option<u32> = None;
+    let mut to_destroy: Vec<u32> = Vec::new();
+    for raw in txt.lines() {
+        let line = raw.trim();
+        if let Some(rest) = line.strip_prefix("id ") {
+            current_id = rest.split(',').next()
+                .and_then(|s| s.trim().parse::<u32>().ok());
+        } else if line.starts_with("node.name = \"audibian_") {
+            if let Some(id) = current_id.take() {
+                to_destroy.push(id);
+            }
+        }
+    }
+
+    for id in to_destroy {
+        let _ = std::process::Command::new("pw-cli")
+            .args(["destroy", &id.to_string()])
+            .spawn();
+    }
 }
 
 pub fn create_null_sink(sink_name: &str) -> Option<u32> {
@@ -1227,26 +1276,20 @@ pub fn create_source_loopback(source: &str, sink: &str, mono: bool) -> Option<u3
     String::from_utf8_lossy(&out.stdout).trim().parse::<u32>().ok()
 }
 
-pub fn write_pipewire_conf(input_channels: &[crate::mixer::InputChannel]) {
+/// Delete the legacy static `audibian-inputs.conf` pipewire drop-in.
+/// Earlier versions wrote a context.objects file that declared null-sinks
+/// statically; pipewire then created ghost sinks at startup with the same
+/// `audibian_*` names as the runtime pactl modules. Apps (Spotify, etc.)
+/// resolved the name to the static ghost — which had no monitor→master
+/// route — so audio dead-ended and the runtime sinks stayed IDLE.
+/// Runtime pactl modules created by `persistent::apply_persistent_state`
+/// fully cover what the static conf did, so the file is now removed on every
+/// configuration mutation and at startup to clear stale ghosts.
+pub fn write_pipewire_conf(_input_channels: &[crate::mixer::InputChannel]) {
     let home = std::env::var("HOME").unwrap_or_else(|_| "/tmp".into());
-    let dir = std::path::PathBuf::from(&home).join(".config/pipewire/pipewire.conf.d");
-    let _ = std::fs::create_dir_all(&dir);
-    let path = dir.join("audibian-inputs.conf");
-
-    if input_channels.is_empty() {
-        let _ = std::fs::remove_file(&path);
-        return;
-    }
-
-    let mut conf = String::from("# Generated by audibian — do not edit manually\ncontext.objects = [\n");
-    for ch in input_channels {
-        conf.push_str(&format!(
-            "    {{\n        factory = adapter\n        args = {{\n            factory.name = support.null-audio-sink\n            node.name = {}\n            node.description = \"{}\"\n            media.class = Audio/Sink\n            audio.position = [ FL FR ]\n        }}\n    }}\n",
-            ch.sink_name, ch.name
-        ));
-    }
-    conf.push_str("]\n");
-    let _ = std::fs::write(path, conf);
+    let path = std::path::PathBuf::from(&home)
+        .join(".config/pipewire/pipewire.conf.d/audibian-inputs.conf");
+    let _ = std::fs::remove_file(&path);
 }
 
 fn unload_module(module_id: u32) {
@@ -1271,6 +1314,50 @@ pub fn apply_strip_pactl(sink: &str, fader: f32, pan: f32, muted: bool) {
     let _ = std::process::Command::new("pactl")
         .args(["set-sink-mute", sink, m])
         .spawn();
+    // Mute every sink-input currently feeding this sink (e.g. Spotify, browser).
+    // Sink-mute alone is reliable on hardware sinks but on pipewire-pulse
+    // null-sinks the propagation to active streams can lag until another
+    // mute event is dispatched. Hitting the streams directly guarantees
+    // the strip is silent immediately for any app routed into it.
+    apply_sink_input_mute(sink, muted);
+}
+
+/// Mute/unmute every sink-input currently routed to `sink` via pactl.
+/// Best-effort: runs `pactl list short sink-inputs`, filters by sink id.
+fn apply_sink_input_mute(sink: &str, muted: bool) {
+    let Some(sink_id) = lookup_sink_id(sink) else { return };
+    let Ok(out) = std::process::Command::new("pactl")
+        .args(["list", "short", "sink-inputs"])
+        .output()
+    else { return };
+    let txt = String::from_utf8_lossy(&out.stdout);
+    let m = if muted { "1" } else { "0" };
+    for line in txt.lines() {
+        let cols: Vec<&str> = line.split('\t').collect();
+        if cols.len() < 2 { continue; }
+        let Ok(si_id) = cols[0].parse::<u32>() else { continue };
+        let Ok(si_sink) = cols[1].parse::<u32>() else { continue };
+        if si_sink != sink_id { continue; }
+        let _ = std::process::Command::new("pactl")
+            .args(["set-sink-input-mute", &si_id.to_string(), m])
+            .spawn();
+    }
+}
+
+fn lookup_sink_id(sink_name: &str) -> Option<u32> {
+    let out = std::process::Command::new("pactl")
+        .args(["list", "short", "sinks"])
+        .output()
+        .ok()?;
+    let txt = String::from_utf8_lossy(&out.stdout);
+    for line in txt.lines() {
+        let cols: Vec<&str> = line.split('\t').collect();
+        if cols.len() < 2 { continue; }
+        if cols[1] == sink_name {
+            return cols[0].parse().ok();
+        }
+    }
+    None
 }
 
 /// Build the runtime solo key for a strip.
@@ -1376,4 +1463,272 @@ pub fn restore_matrix_connections(
             }
         }
     }
+}
+
+// ---------------------------------------------------------------------------
+// Soundboard
+// ---------------------------------------------------------------------------
+
+#[tauri::command]
+pub fn soundboard_list(state: State<AppState>) -> Vec<Sound> {
+    state.soundboard_config.lock().unwrap().sounds.clone()
+}
+
+/// Open a native file picker (`zenity` then `kdialog` as fallback) and
+/// return the chosen path(s). `--multiple` lets the user import a batch
+/// from one dialog. Empty vec = cancelled / picker not installed.
+#[tauri::command]
+pub fn soundboard_pick_file() -> Vec<String> {
+    let run = |bin: &str, args: &[&str], sep: &str| -> Option<Vec<String>> {
+        let out = std::process::Command::new(bin).args(args).output().ok()?;
+        if !out.status.success() { return None; }
+        let s = String::from_utf8_lossy(&out.stdout);
+        let parts: Vec<String> = s.trim()
+            .split(sep)
+            .filter(|p| !p.is_empty())
+            .map(String::from)
+            .collect();
+        if parts.is_empty() { None } else { Some(parts) }
+    };
+    run("zenity", &[
+        "--file-selection",
+        "--multiple",
+        "--separator=\n",
+        "--title=Audibian — Pick sounds",
+        "--file-filter=Audio | *.mp3 *.wav *.ogg *.flac *.m4a *.opus",
+        "--file-filter=All files | *",
+    ], "\n")
+    .or_else(|| run("kdialog", &[
+        "--multiple",
+        "--separator", "\n",
+        "--getopenfilename", ".",
+        "Audio (*.mp3 *.wav *.ogg *.flac *.m4a *.opus)",
+    ], "\n"))
+    .unwrap_or_default()
+}
+
+/// Register a sound. Reserves an id + final destination path, persists the
+/// entry immediately so the UI updates without waiting, then copies the
+/// file and probes its duration on a background thread. When the probe
+/// finishes, mixer.toml gets a second save and the UI re-fetches to pick
+/// up the duration. Returns the placeholder Sound (duration=None).
+#[tauri::command]
+pub fn soundboard_add(
+    state: State<AppState>,
+    source_path: String,
+    display_name: Option<String>,
+) -> Option<Sound> {
+    let src = std::path::PathBuf::from(&source_path);
+    if !src.is_file() { return None; }
+    let ext = src.extension().and_then(|s| s.to_str()).unwrap_or("snd").to_string();
+    let dir = SoundboardConfig::sounds_dir();
+    std::fs::create_dir_all(&dir).ok()?;
+
+    let sound = {
+        let mut cfg = state.soundboard_config.lock().unwrap();
+        let id = cfg.next_id();
+        let stem = src.file_stem().and_then(|s| s.to_str()).unwrap_or("sound");
+        let name = display_name.unwrap_or_else(|| stem.to_string());
+        let dest = dir.join(format!("{}.{}", id, ext));
+        let s = Sound {
+            id,
+            name,
+            path: dest.to_string_lossy().to_string(),
+            duration_ms: None,
+            start_ms: None,
+            end_ms: None,
+        };
+        cfg.sounds.push(s.clone());
+        cfg.save();
+        s
+    };
+
+    // Offload copy + probe to a worker so the tauri command thread returns
+    // immediately. Large WAV imports no longer freeze the UI.
+    let cfg_handle = state.soundboard_config.clone();
+    let src_clone = src.clone();
+    let id = sound.id;
+    let dest_path = std::path::PathBuf::from(&sound.path);
+    std::thread::spawn(move || {
+        if std::fs::copy(&src_clone, &dest_path).is_err() {
+            // Roll back the registration on copy failure.
+            let mut cfg = cfg_handle.lock().unwrap();
+            cfg.sounds.retain(|s| s.id != id);
+            cfg.save();
+            return;
+        }
+        let dur = probe_duration_ms(&dest_path);
+        if dur.is_some() {
+            let mut cfg = cfg_handle.lock().unwrap();
+            if let Some(s) = cfg.sounds.iter_mut().find(|s| s.id == id) {
+                s.duration_ms = dur;
+                cfg.save();
+            }
+        }
+    });
+
+    Some(sound)
+}
+
+#[tauri::command]
+pub fn soundboard_remove(state: State<AppState>, id: u32) {
+    let mut cfg = state.soundboard_config.lock().unwrap();
+    if let Some(pos) = cfg.sounds.iter().position(|s| s.id == id) {
+        let s = cfg.sounds.remove(pos);
+        let _ = std::fs::remove_file(&s.path);
+        cfg.save();
+    }
+}
+
+#[tauri::command]
+pub fn soundboard_rename(state: State<AppState>, id: u32, name: String) {
+    let mut cfg = state.soundboard_config.lock().unwrap();
+    if let Some(s) = cfg.sounds.iter_mut().find(|s| s.id == id) {
+        s.name = name;
+        cfg.save();
+    }
+}
+
+/// Set or clear the trim window. Either bound may be `None` to disable
+/// that side (None/None plays the full file). Stored in milliseconds.
+#[tauri::command]
+pub fn soundboard_set_trim(
+    state: State<AppState>,
+    id: u32,
+    start_ms: Option<u32>,
+    end_ms: Option<u32>,
+) {
+    let mut cfg = state.soundboard_config.lock().unwrap();
+    if let Some(s) = cfg.sounds.iter_mut().find(|s| s.id == id) {
+        // Normalise: swap if reversed, drop end if <= start.
+        let (a, b) = match (start_ms, end_ms) {
+            (Some(a), Some(b)) if a > b => (Some(b), Some(a)),
+            other => other,
+        };
+        s.start_ms = a;
+        s.end_ms = match (a, b) {
+            (Some(a), Some(b)) if b <= a => None,
+            _ => b,
+        };
+        cfg.save();
+    }
+}
+
+/// Play a sound by id into the soundboard sink. Untrimmed sounds run
+/// `paplay` directly. Trimmed sounds pipe `ffmpeg -ss/-to … -f wav -`
+/// into `paplay --raw`, so the cut happens on the fly without writing a
+/// temp file. Tracks every child for stop-all.
+#[tauri::command]
+pub fn soundboard_play(state: State<AppState>, id: u32) {
+    let sound = {
+        let cfg = state.soundboard_config.lock().unwrap();
+        match cfg.sounds.iter().find(|s| s.id == id) {
+            Some(s) => s.clone(),
+            None => return,
+        }
+    };
+
+    reap_finished_soundboard_procs(&state);
+
+    let trimmed = sound.start_ms.is_some() || sound.end_ms.is_some();
+    if !trimmed {
+        let child = std::process::Command::new("paplay")
+            .args(["--device", SOUNDBOARD_SINK_NAME, &sound.path])
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn();
+        if let Ok(child) = child {
+            state.soundboard_procs.lock().unwrap().push(child);
+        }
+        return;
+    }
+
+    // Build the ffmpeg pipe. `-ss` before `-i` is a fast seek; pair with
+    // `-to` (absolute end timestamp). Output s16le 48k stereo so paplay
+    // doesn't need to negotiate format.
+    let mut ff_args: Vec<String> = vec!["-nostdin".into(), "-loglevel".into(), "error".into()];
+    if let Some(start) = sound.start_ms {
+        ff_args.push("-ss".into());
+        ff_args.push(format!("{:.3}", start as f64 / 1000.0));
+    }
+    ff_args.push("-i".into());
+    ff_args.push(sound.path.clone());
+    if let Some(end) = sound.end_ms {
+        let start = sound.start_ms.unwrap_or(0);
+        if end > start {
+            ff_args.push("-t".into());
+            ff_args.push(format!("{:.3}", (end - start) as f64 / 1000.0));
+        }
+    }
+    ff_args.extend([
+        "-f".into(), "s16le".into(),
+        "-ar".into(), "48000".into(),
+        "-ac".into(), "2".into(),
+        "pipe:1".into(),
+    ]);
+
+    let ff = std::process::Command::new("ffmpeg")
+        .args(&ff_args)
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::null())
+        .spawn();
+    let mut ff = match ff { Ok(c) => c, Err(_) => return };
+    let ff_stdout = match ff.stdout.take() { Some(s) => s, None => return };
+
+    let pap = std::process::Command::new("paplay")
+        .args([
+            "--device", SOUNDBOARD_SINK_NAME,
+            "--raw",
+            "--format=s16le",
+            "--rate=48000",
+            "--channels=2",
+        ])
+        .stdin(ff_stdout)
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn();
+
+    let mut procs = state.soundboard_procs.lock().unwrap();
+    match pap {
+        Ok(pap) => {
+            procs.push(ff);
+            procs.push(pap);
+        }
+        Err(_) => { let _ = ff.kill(); }
+    }
+}
+
+#[tauri::command]
+pub fn soundboard_stop_all(state: State<AppState>) {
+    let mut procs = state.soundboard_procs.lock().unwrap();
+    for child in procs.iter_mut() {
+        let _ = child.kill();
+    }
+    procs.clear();
+}
+
+fn reap_finished_soundboard_procs(state: &State<AppState>) {
+    let mut procs = state.soundboard_procs.lock().unwrap();
+    procs.retain_mut(|c| matches!(c.try_wait(), Ok(None)));
+}
+
+/// Run `ffprobe -show_entries format=duration` and parse the seconds
+/// value into milliseconds. Returns None on any failure.
+fn probe_duration_ms(path: &std::path::Path) -> Option<u32> {
+    let out = std::process::Command::new("ffprobe")
+        .args([
+            "-v", "error",
+            "-show_entries", "format=duration",
+            "-of", "default=noprint_wrappers=1:nokey=1",
+        ])
+        .arg(path)
+        .output()
+        .ok()?;
+    if !out.status.success() { return None; }
+    let s = String::from_utf8_lossy(&out.stdout);
+    let secs: f64 = s.trim().parse().ok()?;
+    if !secs.is_finite() || secs < 0.0 { return None; }
+    Some((secs * 1000.0).round() as u32)
 }

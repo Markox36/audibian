@@ -17,8 +17,26 @@ const nodeColor = (mc) => {
 
 const displayName = (n) => n.nick || n.description || n.app_name || n.name
 
+// Hide audibian-managed plumbing from the Matrix view: every virtual sink
+// we create (audibian_master, audibian_<channel>, audibian_<return>,
+// audibian_soundboard, audibian_return_*_src), our peak-meter capture
+// streams, internal loopback/remap helper nodes, and pavucontrol's own
+// monitoring streams. Routing for audibian_* strips lives in the Mixer,
+// not here; surfacing them in both places just creates duplicate UI.
+const HIDDEN_NODE_RE = /^(audibian([_-]|$)|(input|output)\.(loopback-|audibian_))/
+
+const HIDDEN_APP_NAMES = new Set([
+  'Control de volumen de PulseAudio',
+  'PulseAudio Volume Control',
+  'pavucontrol',
+  'audibian',
+  'audibian-meter',
+])
+
 const isAudioNode = (n) =>
-  n.media_class?.startsWith('Audio') || n.media_class?.startsWith('Stream')
+  (n.media_class?.startsWith('Audio') || n.media_class?.startsWith('Stream')) &&
+  !HIDDEN_NODE_RE.test(n.name || '') &&
+  !HIDDEN_APP_NAMES.has(n.app_name || '')
 
 export default function Matrix({ graph, onCreateLink, onDestroyLink }) {
   const { nodes, ports, links } = graph
