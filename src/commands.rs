@@ -4,7 +4,7 @@ use log::debug;
 use crate::audio::eq::EqBand;
 use crate::audio::effects;
 use crate::audio::{AudioGraph, PwCommand, PwThread};
-use crate::mixer::{InputChannel, ReturnChannel};
+use crate::mixer::{InputChannel, MidiChannel, MidiPlugin, ReturnChannel};
 use crate::profiles::model::AudioProfile;
 use crate::profiles::AppConfig;
 use crate::soundboard::{Sound, SoundboardConfig, SOUNDBOARD_SINK_NAME};
@@ -1732,3 +1732,598 @@ fn probe_duration_ms(path: &std::path::Path) -> Option<u32> {
     if !secs.is_finite() || secs < 0.0 { return None; }
     Some((secs * 1000.0).round() as u32)
 }
+
+// ---------------------------------------------------------------------------
+// MIDI / VST channels (Carla-backed)
+// ---------------------------------------------------------------------------
+
+/// Detect whether the Carla host is callable. UI uses this to gate the
+/// "Open in Carla" button and surface an install hint when missing.
+#[tauri::command]
+pub fn midi_carla_available() -> bool {
+    std::process::Command::new("carla")
+        .arg("--version")
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .map(|mut c| { let _ = c.kill(); true })
+        .unwrap_or(false)
+}
+
+#[tauri::command]
+pub fn midi_channel_list(state: State<AppState>) -> Vec<MidiChannel> {
+    state.mixer_config.lock().unwrap().midi_channels.clone()
+}
+
+/// Create a new MIDI strip. Reserves an id, creates the backing audibian
+/// null-sink, wires its monitor → master so the strip is audible the
+/// moment Carla starts emitting. Does NOT spawn Carla here — that
+/// happens on `midi_channel_open_gui`, so headless boot is cheap.
+#[tauri::command]
+pub fn midi_channel_add(state: State<AppState>, name: Option<String>) -> Option<MidiChannel> {
+    let ch = {
+        let mut cfg = state.mixer_config.lock().unwrap();
+        let id = cfg.next_channel_id();
+        let order = cfg.midi_channels.len() as u32;
+        let display = name.unwrap_or_else(|| format!("MIDI {}", id));
+        let sink_name = format!("audibian_midi_{}", id);
+        let ch = MidiChannel {
+            id,
+            name: display,
+            sink_name: sink_name.clone(),
+            order,
+            color: Some("#7a638a".to_string()),
+            send_to_master: true,
+            pan: 0.0,
+            fader: 1.0,
+            muted: false,
+            plugins: Vec::new(),
+            ..Default::default()
+        };
+        cfg.midi_channels.push(ch.clone());
+        cfg.save();
+        ch
+    };
+
+    let _ = create_null_sink(&ch.sink_name);
+
+    // Auto-route sink → master so the user hears Carla as soon as the host
+    // emits audio. Sleeps a beat to let pipewire register the sink first.
+    let app_sink = ch.sink_name.clone();
+    let pw = state.pw.clone();
+    let graph_arc = state.graph.clone();
+    std::thread::spawn(move || {
+        std::thread::sleep(std::time::Duration::from_millis(300));
+        let graph = graph_arc.lock().unwrap();
+        connect_nodes(&graph, &app_sink, MASTER_SINK_NAME, &pw, false);
+    });
+
+    Some(ch)
+}
+
+#[tauri::command]
+pub fn midi_channel_remove(state: State<AppState>, id: u32) {
+    // Kill any running Carla rack for this channel.
+    if let Some(mut child) = state.midi_carla_procs.lock().unwrap().remove(&id) {
+        let _ = child.kill();
+    }
+
+    let sink_name = {
+        let mut cfg = state.mixer_config.lock().unwrap();
+        let removed = cfg.midi_channels.iter()
+            .find(|c| c.id == id)
+            .map(|c| c.sink_name.clone());
+        cfg.midi_channels.retain(|c| c.id != id);
+        cfg.save();
+        removed
+    };
+
+    if let Some(sink) = sink_name {
+        // No persisted pactl module id for midi sinks (they're created
+        // by persistent.rs / midi_channel_add), so address by name.
+        if let Some(mid) = lookup_module_id_by_sink(&sink) {
+            unload_module(mid);
+        }
+    }
+}
+
+/// Locate the pactl module-null-sink that owns a sink by name. Returns
+/// None when the sink wasn't created via pactl (e.g. left over from a
+/// previous session that lost its module).
+fn lookup_module_id_by_sink(sink_name: &str) -> Option<u32> {
+    let out = std::process::Command::new("pactl")
+        .args(["list", "short", "modules"])
+        .output()
+        .ok()?;
+    let txt = String::from_utf8_lossy(&out.stdout);
+    let needle = format!("sink_name={}", sink_name);
+    for line in txt.lines() {
+        if line.contains("module-null-sink") && line.contains(&needle) {
+            if let Some(id_str) = line.split('\t').next() {
+                if let Ok(id) = id_str.trim().parse::<u32>() {
+                    return Some(id);
+                }
+            }
+        }
+    }
+    None
+}
+
+#[tauri::command]
+pub fn midi_channel_rename(state: State<AppState>, id: u32, name: String) {
+    let mut cfg = state.mixer_config.lock().unwrap();
+    if let Some(c) = cfg.midi_channels.iter_mut().find(|c| c.id == id) {
+        c.name = name;
+        cfg.save();
+    }
+}
+
+#[tauri::command]
+pub fn midi_plugin_add(
+    state: State<AppState>,
+    channel_id: u32,
+    format: String,
+    identifier: String,
+    name: Option<String>,
+) -> Option<MidiPlugin> {
+    let mut cfg = state.mixer_config.lock().unwrap();
+    let ch = cfg.midi_channels.iter_mut().find(|c| c.id == channel_id)?;
+    let pid = ch.next_plugin_id();
+    let display = name.unwrap_or_else(|| {
+        // Best-effort label: tail of URI or basename of path.
+        identifier
+            .rsplit_once('/')
+            .map(|(_, t)| t.to_string())
+            .unwrap_or_else(|| identifier.clone())
+    });
+    let plugin = MidiPlugin {
+        id: pid,
+        name: display,
+        identifier,
+        format,
+    };
+    ch.plugins.push(plugin.clone());
+    cfg.save();
+    drop(cfg);
+    sync_plugins_to_carla(&state, channel_id);
+    Some(plugin)
+}
+
+#[tauri::command]
+pub fn midi_plugin_remove(state: State<AppState>, channel_id: u32, plugin_id: u32) {
+    {
+        let mut cfg = state.mixer_config.lock().unwrap();
+        if let Some(ch) = cfg.midi_channels.iter_mut().find(|c| c.id == channel_id) {
+            ch.plugins.retain(|p| p.id != plugin_id);
+            cfg.save();
+        }
+    }
+    sync_plugins_to_carla(&state, channel_id);
+}
+
+/// Reorder the plugin chain. `plugin_ids` is the new order; any ids not
+/// present in the channel are ignored, any missing existing ids stay at
+/// their original tail position (defensive against UI/state drift).
+#[tauri::command]
+pub fn midi_plugin_reorder(state: State<AppState>, channel_id: u32, plugin_ids: Vec<u32>) {
+    let mut cfg = state.mixer_config.lock().unwrap();
+    let Some(ch) = cfg.midi_channels.iter_mut().find(|c| c.id == channel_id) else { return };
+    let mut reordered: Vec<MidiPlugin> = Vec::with_capacity(ch.plugins.len());
+    for id in &plugin_ids {
+        if let Some(pos) = ch.plugins.iter().position(|p| p.id == *id) {
+            reordered.push(ch.plugins.remove(pos));
+        }
+    }
+    reordered.extend(ch.plugins.drain(..));
+    ch.plugins = reordered;
+    cfg.save();
+    drop(cfg);
+    sync_plugins_to_carla(&state, channel_id);
+}
+
+/// Patch `~/.config/falkTX/Carla2.conf` so the Engine driver is JACK
+/// (which on PipeWire goes through pipewire-jack and respects
+/// PIPEWIRE_NODE_NAME). Creates the file with a minimal [Engine]
+/// section if missing; rewrites the AudioDriver line if present.
+fn ensure_carla_jack_driver() {
+    let home = match std::env::var("HOME") { Ok(h) => h, Err(_) => return };
+    let path = std::path::PathBuf::from(home).join(".config/falkTX/Carla2.conf");
+    if let Some(parent) = path.parent() { let _ = std::fs::create_dir_all(parent); }
+
+    let existing = std::fs::read_to_string(&path).unwrap_or_default();
+    // Already JACK? Skip.
+    if existing.lines().any(|l| l.trim() == "AudioDriver=JACK") { return; }
+
+    if existing.is_empty() {
+        let _ = std::fs::write(&path, "[Engine]\nAudioDriver=JACK\n");
+        return;
+    }
+
+    let mut out = String::with_capacity(existing.len());
+    let mut in_engine = false;
+    let mut wrote = false;
+    for line in existing.lines() {
+        let trimmed = line.trim();
+        if trimmed.starts_with('[') {
+            // Leaving Engine without having written the line? Inject before next section.
+            if in_engine && !wrote {
+                out.push_str("AudioDriver=JACK\n");
+                wrote = true;
+            }
+            in_engine = trimmed == "[Engine]";
+        }
+        if in_engine && trimmed.starts_with("AudioDriver=") {
+            out.push_str("AudioDriver=JACK\n");
+            wrote = true;
+            continue;
+        }
+        out.push_str(line);
+        out.push('\n');
+    }
+    if !wrote {
+        // No [Engine] section existed: append one.
+        out.push_str("\n[Engine]\nAudioDriver=JACK\n");
+    }
+    let _ = std::fs::write(&path, out);
+}
+
+/// Pick a free UDP/TCP port by binding to 0, reading the assigned port,
+/// then dropping the socket. Inherently racey (port could be reclaimed
+/// before Carla starts) but good enough for a single-user launcher.
+fn allocate_port_udp() -> Option<u16> {
+    std::net::UdpSocket::bind("127.0.0.1:0").ok()
+        .and_then(|s| s.local_addr().ok())
+        .map(|a| a.port())
+}
+fn allocate_port_tcp() -> Option<u16> {
+    std::net::TcpListener::bind("127.0.0.1:0").ok()
+        .and_then(|s| s.local_addr().ok())
+        .map(|a| a.port())
+}
+
+/// Send a single OSC message via UDP to a running Carla on 127.0.0.1.
+/// Best-effort; failures are logged and swallowed since OSC has no
+/// inherent reply for these commands.
+fn send_osc_udp(port: u16, path: &str, args: Vec<rosc::OscType>) {
+    let msg = rosc::OscPacket::Message(rosc::OscMessage {
+        addr: path.to_string(),
+        args,
+    });
+    let buf = match rosc::encoder::encode(&msg) {
+        Ok(b) => b,
+        Err(e) => { debug!("osc encode failed: {:?}", e); return; }
+    };
+    let sock = match std::net::UdpSocket::bind("127.0.0.1:0") {
+        Ok(s) => s,
+        Err(e) => { debug!("osc bind failed: {:?}", e); return; }
+    };
+    if let Err(e) = sock.send_to(&buf, ("127.0.0.1", port)) {
+        debug!("osc send failed: {:?}", e);
+    }
+}
+
+/// Map audibian's plugin format string + identifier to Carla's
+/// PluginType code and (filename, label) pair expected by /ctrl/add_plugin.
+/// VST3/VST2/CLAP use the .so path as filename and an empty label (Carla
+/// picks the first class). LV2 uses an empty filename and the URI as label.
+fn carla_plugin_args(format: &str, identifier: &str) -> Option<(i32, String, String)> {
+    match format {
+        "LV2"  => Some((4,  String::new(),       identifier.to_string())),
+        "VST2" => Some((5,  identifier.to_string(), String::new())),
+        "VST3" => Some((6,  identifier.to_string(), String::new())),
+        "SFZ"  => Some((11, identifier.to_string(), String::new())),
+        // Carla's CLAP support varies by version; PLUGIN_CLAP=14 in recent.
+        "CLAP" => Some((14, identifier.to_string(), String::new())),
+        _ => None,
+    }
+}
+
+/// Launch a Carla rack process for the channel (or focus the running
+/// one). The rack's JACK client name is pinned via PIPEWIRE_NODE_NAME so
+/// we can wire its output ports back to the channel's null-sink even
+/// across restarts. Carla saves its plugin instance state in its own
+/// project file under `~/.config/audibian/midi/midi_<id>.carxp`.
+///
+/// Headless (`--no-gui`) + per-channel OSC ports means audibian fully
+/// drives Carla: add_plugin / show_custom_ui / etc all go over OSC.
+/// The visible plugin GUI is the plugin's native window (shown on demand).
+#[tauri::command]
+pub fn midi_channel_open_gui(state: State<AppState>, id: u32) -> bool {
+    let ch = {
+        let mut cfg = state.mixer_config.lock().unwrap();
+        let c = match cfg.midi_channels.iter_mut().find(|c| c.id == id) { Some(c) => c, None => return false };
+        // Allocate OSC ports on first launch and persist.
+        if c.osc_udp_port == 0 {
+            c.osc_udp_port = allocate_port_udp().unwrap_or(22752);
+        }
+        if c.osc_tcp_port == 0 {
+            c.osc_tcp_port = allocate_port_tcp().unwrap_or(22753);
+        }
+        let snap = c.clone();
+        cfg.save();
+        snap
+    };
+
+    // Reap dead carla.
+    {
+        let mut procs = state.midi_carla_procs.lock().unwrap();
+        let dead = procs.get_mut(&id)
+            .map(|c| matches!(c.try_wait(), Ok(Some(_))))
+            .unwrap_or(false);
+        if dead { procs.remove(&id); }
+        if procs.contains_key(&id) { return true; }
+    }
+
+    let project = ch.carla_project_path();
+    if let Some(parent) = project.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    let client_name = ch.carla_client_name();
+
+    // Force JACK driver in Carla's user config so PIPEWIRE_NODE_NAME
+    // actually renames the rack's PipeWire client. PulseAudio backend
+    // creates a generic "Carla" client which audibian's auto-wire can't
+    // disambiguate when multiple channels are open.
+    ensure_carla_jack_driver();
+
+    let mut cmd = std::process::Command::new("carla-rack");
+    cmd.env("PIPEWIRE_NODE_NAME", &client_name);
+    cmd.env("CARLA_OSC_UDP_PORT", ch.osc_udp_port.to_string());
+    cmd.env("CARLA_OSC_TCP_PORT", ch.osc_tcp_port.to_string());
+    cmd.stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null());
+    if project.exists() {
+        cmd.arg(&project);
+    }
+    let child = match cmd.spawn() {
+        Ok(c) => c,
+        Err(_) => return false,
+    };
+    state.midi_carla_procs.lock().unwrap().insert(id, child);
+
+    // Wire carla → channel sink once its JACK client registers.
+    let pw = state.pw.clone();
+    let graph_arc = state.graph.clone();
+    let sink_name = ch.sink_name.clone();
+    let client = client_name.clone();
+    std::thread::spawn(move || {
+        for _ in 0..40 {
+            std::thread::sleep(std::time::Duration::from_millis(250));
+            let graph = graph_arc.lock().unwrap();
+            let appeared = graph.nodes.values().any(|n| n.name == client);
+            if appeared {
+                connect_nodes(&graph, &client, &sink_name, &pw, false);
+                break;
+            }
+        }
+    });
+
+    // Push current plugin list into Carla once the engine is up. Carla
+    // needs a beat to bind its OSC port; 500ms is a safe-but-cheap delay.
+    let port = ch.osc_udp_port;
+    let plugins = ch.plugins.clone();
+    if port != 0 && !plugins.is_empty() {
+        std::thread::spawn(move || {
+            std::thread::sleep(std::time::Duration::from_millis(500));
+            send_osc_udp(port, "/ctrl/remove_all_plugins", vec![]);
+            for p in &plugins {
+                let Some((ptype, filename, label)) = carla_plugin_args(&p.format, &p.identifier) else { continue };
+                send_osc_udp(port, "/ctrl/add_plugin", vec![
+                    rosc::OscType::Int(1),
+                    rosc::OscType::Int(ptype),
+                    rosc::OscType::String(filename),
+                    rosc::OscType::String(p.name.clone()),
+                    rosc::OscType::String(label),
+                    rosc::OscType::Long(0),
+                    rosc::OscType::Int(0),
+                ]);
+            }
+        });
+    }
+
+    true
+}
+
+/// Kill the Carla process for a channel without removing the channel.
+/// Useful when the rack is mis-behaving and the user wants to relaunch.
+#[tauri::command]
+pub fn midi_channel_close_gui(state: State<AppState>, id: u32) {
+    if let Some(mut child) = state.midi_carla_procs.lock().unwrap().remove(&id) {
+        let _ = child.kill();
+    }
+}
+
+/// Resolve a channel's OSC UDP port and plugin index. Returns None if
+/// the channel is unknown, Carla isn't running, or the plugin is missing.
+fn resolve_osc_target(state: &State<AppState>, channel_id: u32, plugin_id: u32) -> Option<(u16, usize)> {
+    let cfg = state.mixer_config.lock().unwrap();
+    let ch = cfg.midi_channels.iter().find(|c| c.id == channel_id)?;
+    if ch.osc_udp_port == 0 { return None; }
+    let idx = ch.plugins.iter().position(|p| p.id == plugin_id)?;
+    Some((ch.osc_udp_port, idx))
+}
+
+/// Show the plugin's native UI (the Pianoteq/Surge/etc window). Sends
+/// OSC `/Carla/<idx>/show_custom_ui i:1` — fire-and-forget UDP, no reply.
+/// Plugin must already exist in Carla's chain (added via midi_plugin_add).
+#[tauri::command]
+pub fn midi_plugin_show_native_gui(state: State<AppState>, channel_id: u32, plugin_id: u32) -> bool {
+    let Some((port, idx)) = resolve_osc_target(&state, channel_id, plugin_id) else { return false };
+    let path = format!("/Carla/{}/show_custom_ui", idx);
+    send_osc_udp(port, &path, vec![rosc::OscType::Int(1)]);
+    true
+}
+
+#[tauri::command]
+pub fn midi_plugin_hide_native_gui(state: State<AppState>, channel_id: u32, plugin_id: u32) -> bool {
+    let Some((port, idx)) = resolve_osc_target(&state, channel_id, plugin_id) else { return false };
+    let path = format!("/Carla/{}/show_custom_ui", idx);
+    send_osc_udp(port, &path, vec![rosc::OscType::Int(0)]);
+    true
+}
+
+/// Push audibian's plugin list to a running Carla instance. Sends
+/// `/ctrl/remove_all_plugins` followed by one `/ctrl/add_plugin` per
+/// plugin in order, so Carla's chain mirrors what the UI shows. Called
+/// after `midi_plugin_add` / `midi_plugin_remove` / `midi_plugin_reorder`
+/// when the rack is up; a no-op if Carla isn't running for the channel.
+fn sync_plugins_to_carla(state: &State<AppState>, channel_id: u32) {
+    let (port, plugins) = {
+        let cfg = state.mixer_config.lock().unwrap();
+        let Some(ch) = cfg.midi_channels.iter().find(|c| c.id == channel_id) else { return };
+        if ch.osc_udp_port == 0 { return; }
+        (ch.osc_udp_port, ch.plugins.clone())
+    };
+    if !state.midi_carla_procs.lock().unwrap().contains_key(&channel_id) { return; }
+    send_osc_udp(port, "/ctrl/remove_all_plugins", vec![]);
+    for p in &plugins {
+        let Some((ptype, filename, label)) = carla_plugin_args(&p.format, &p.identifier) else { continue };
+        // Carla /ctrl/add_plugin signature: btype, ptype, filename, name, label, uniqueId, options
+        // BINARY_NATIVE = 1 on 64-bit Linux.
+        send_osc_udp(port, "/ctrl/add_plugin", vec![
+            rosc::OscType::Int(1),                 // btype = native
+            rosc::OscType::Int(ptype),
+            rosc::OscType::String(filename),
+            rosc::OscType::String(p.name.clone()),
+            rosc::OscType::String(label),
+            rosc::OscType::Long(0),                // uniqueId
+            rosc::OscType::Int(0),                 // options (0 = default)
+        ]);
+    }
+}
+
+/// Force-push the current audibian plugin chain into Carla. UI hook so
+/// the user can re-sync after manual edits or when Carla just came up.
+#[tauri::command]
+pub fn midi_channel_sync_plugins(state: State<AppState>, channel_id: u32) {
+    sync_plugins_to_carla(&state, channel_id);
+}
+
+/// Report whether the current session can embed plugin windows. Returns
+/// true on X11 (we have a usable XID) and false on Wayland or anything
+/// else. UI uses this to fall back to "show as floating window" mode.
+#[tauri::command]
+pub fn midi_embed_available(state: State<AppState>) -> bool {
+    #[cfg(target_os = "linux")]
+    {
+        let xid = *state.main_xid.lock().unwrap();
+        if xid == 0 { return false; }
+        // Cross-check the session type: even if we got an XID via Xwayland
+        // for audibian, a Wayland-only Carla won't expose an X11 window we
+        // can reparent. Conservative: require pure X11.
+        let session = std::env::var("XDG_SESSION_TYPE").unwrap_or_default();
+        return session == "x11";
+    }
+    #[cfg(not(target_os = "linux"))]
+    { let _ = state; false }
+}
+
+/// Embed the plugin's native X11 window inside audibian's toplevel.
+/// Workflow: the UI first calls `midi_plugin_show_native_gui` to ask
+/// Carla to map the plugin window, then this command finds that window
+/// by walking the X tree for the Carla process's PID and reparents the
+/// non-Carla toplevel into our main window at the given rect.
+///
+/// Returns false if X11 isn't available, the Carla rack isn't running,
+/// or the plugin window hasn't appeared yet (UI should retry).
+#[tauri::command]
+#[cfg(target_os = "linux")]
+pub fn midi_plugin_embed_gui(
+    state: State<AppState>,
+    channel_id: u32,
+    plugin_id: u32,
+    x: i32,
+    y: i32,
+    width: u32,
+    height: u32,
+) -> bool {
+    let parent_xid = *state.main_xid.lock().unwrap();
+    if parent_xid == 0 { return false; }
+
+    // Look up Carla's pid for this channel. Required to filter X windows.
+    let carla_pid = {
+        let procs = state.midi_carla_procs.lock().unwrap();
+        match procs.get(&channel_id) { Some(c) => c.id(), None => return false }
+    };
+
+    let x11 = match crate::x11_embed::X11::connect() {
+        Some(c) => c,
+        None => return false,
+    };
+
+    // If we've already embedded this plugin, just move/resize.
+    if let Some(&existing) = state.embedded_plugin_windows.lock().unwrap().get(&(channel_id, plugin_id)) {
+        x11.move_resize(existing, x, y, width, height);
+        return true;
+    }
+
+    // Walk all windows owned by Carla, skip the rack toplevel. The plugin
+    // window's title is set by the plugin (e.g. "Pianoteq 9"), Carla's
+    // own rack window's title starts with "Carla".
+    let candidates = x11.find_windows_by_pid(carla_pid);
+    let mut target: Option<u32> = None;
+    for w in candidates {
+        let name = x11.window_name(w);
+        if name.is_empty() { continue; }
+        if name.starts_with("Carla") { continue; }
+        target = Some(w);
+        break;
+    }
+    let Some(plugin_win) = target else { return false };
+
+    x11.strip_decorations(plugin_win);
+    if !x11.reparent(plugin_win, parent_xid, x as i16, y as i16) {
+        return false;
+    }
+    x11.move_resize(plugin_win, x, y, width, height);
+    state.embedded_plugin_windows.lock().unwrap().insert((channel_id, plugin_id), plugin_win);
+    true
+}
+
+/// Move/resize an already-embedded plugin window. Called by the UI
+/// whenever the placeholder div's bounding rect changes (window resize,
+/// scroll, layout shift). No-op if the plugin isn't currently embedded.
+#[tauri::command]
+#[cfg(target_os = "linux")]
+pub fn midi_plugin_position_gui(
+    state: State<AppState>,
+    channel_id: u32,
+    plugin_id: u32,
+    x: i32,
+    y: i32,
+    width: u32,
+    height: u32,
+) -> bool {
+    let Some(&xid) = state.embedded_plugin_windows.lock().unwrap().get(&(channel_id, plugin_id)) else {
+        return false;
+    };
+    let Some(x11) = crate::x11_embed::X11::connect() else { return false };
+    x11.move_resize(xid, x, y, width, height);
+    true
+}
+
+/// Detach a previously-embedded plugin window back to root. Used when
+/// the user closes the embed without killing Carla.
+#[tauri::command]
+#[cfg(target_os = "linux")]
+pub fn midi_plugin_unembed_gui(state: State<AppState>, channel_id: u32, plugin_id: u32) -> bool {
+    let Some(xid) = state.embedded_plugin_windows.lock().unwrap().remove(&(channel_id, plugin_id)) else {
+        return false;
+    };
+    let Some(x11) = crate::x11_embed::X11::connect() else { return false };
+    x11.unparent_to_root(xid);
+    true
+}
+
+// Non-Linux stubs so the command list stays the same across platforms.
+#[tauri::command]
+#[cfg(not(target_os = "linux"))]
+pub fn midi_plugin_embed_gui(_channel_id: u32, _plugin_id: u32, _x: i32, _y: i32, _width: u32, _height: u32) -> bool { false }
+#[tauri::command]
+#[cfg(not(target_os = "linux"))]
+pub fn midi_plugin_position_gui(_channel_id: u32, _plugin_id: u32, _x: i32, _y: i32, _width: u32, _height: u32) -> bool { false }
+#[tauri::command]
+#[cfg(not(target_os = "linux"))]
+pub fn midi_plugin_unembed_gui(_channel_id: u32, _plugin_id: u32) -> bool { false }

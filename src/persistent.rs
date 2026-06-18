@@ -54,6 +54,13 @@ pub fn apply_persistent_state(cfg: &MixerConfig) -> RestoredModules {
         }
     }
 
+    // MIDI channel sinks. Each MIDI strip needs the same kind of stereo
+    // null-sink as a regular input strip; the audio source feeding it is
+    // a Carla rack process started from the GUI (not from headless mode).
+    for ch in &cfg.midi_channels {
+        let _ = commands::create_null_sink(&ch.sink_name);
+    }
+
     // Return buses (null-sink + remap-source visible to apps).
     for r in &cfg.return_channels {
         let mut mods = Vec::new();

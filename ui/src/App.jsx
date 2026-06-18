@@ -9,6 +9,7 @@ import Effects from './components/Effects'
 import Profiles from './components/Profiles'
 import Settings from './components/Settings'
 import Soundboard from './components/Soundboard'
+import MidiChannels from './components/MidiChannels'
 
 export default function App() {
   const [activeTab, setActiveTab] = useState('matrix')
@@ -113,6 +114,7 @@ export default function App() {
     { id: 'matrix', label: 'Matrix' },
     { id: 'mixer', label: 'Mixer' },
     { id: 'soundboard', label: 'Soundboard' },
+    { id: 'midi', label: 'MIDI' },
     { id: 'effects', label: 'Effects' },
     { id: 'profiles', label: 'Profiles' },
     { id: 'settings', label: '⚙' },
@@ -170,6 +172,7 @@ export default function App() {
         )}
         {activeTab === 'mixer' && <Mixer graph={graph} />}
         {activeTab === 'soundboard' && <Soundboard />}
+        {activeTab === 'midi' && <MidiChannels />}
         {activeTab === 'effects' && <Effects graph={graph} />}
         {activeTab === 'profiles' && <Profiles />}
         {activeTab === 'settings' && (

@@ -41,4 +41,16 @@ pub struct AppState {
     /// Currently playing `paplay` children, one per Play click. Reaped on
     /// next Play and on Stop-all. Drop kills survivors at process exit.
     pub soundboard_procs: Arc<Mutex<Vec<std::process::Child>>>,
+    /// Carla rack child process per MIDI channel id. Spawned lazily when
+    /// the user opens the host GUI; killed on channel removal / app exit.
+    pub midi_carla_procs: Arc<Mutex<HashMap<u32, std::process::Child>>>,
+    /// X11 window id of audibian's main toplevel. Captured at setup so the
+    /// MIDI rack can reparent plugin GUIs into it. Zero on Wayland or when
+    /// the handle couldn't be resolved.
+    #[cfg(target_os = "linux")]
+    pub main_xid: Arc<Mutex<u32>>,
+    /// Track which plugin windows we've embedded so subsequent move/resize
+    /// calls know the target XID. Key = (channel_id, plugin_id).
+    #[cfg(target_os = "linux")]
+    pub embedded_plugin_windows: Arc<Mutex<HashMap<(u32, u32), u32>>>,
 }

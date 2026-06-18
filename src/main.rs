@@ -7,6 +7,8 @@ mod matrix_config;
 mod meter;
 mod persistent;
 mod soundboard;
+#[cfg(target_os = "linux")]
+mod x11_embed;
 
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
@@ -137,8 +139,30 @@ fn main() {
                 meter_rx: meter_rx.clone(),
                 soundboard_config: Arc::new(Mutex::new(soundboard_cfg)),
                 soundboard_procs: Arc::new(Mutex::new(Vec::new())),
+                midi_carla_procs: Arc::new(Mutex::new(HashMap::new())),
+                #[cfg(target_os = "linux")]
+                main_xid: Arc::new(Mutex::new(0)),
+                #[cfg(target_os = "linux")]
+                embedded_plugin_windows: Arc::new(Mutex::new(HashMap::new())),
             };
             app.manage(state);
+
+            // Resolve the main toplevel's X11 window id from the raw window
+            // handle. Stored in AppState so the MIDI rack can later reparent
+            // plugin GUIs into us. Zero on Wayland or if the handle is not
+            // an Xlib handle (which means embedding is unavailable).
+            #[cfg(target_os = "linux")]
+            if let Some(win) = app.get_webview_window("main") {
+                use raw_window_handle::{HasWindowHandle, RawWindowHandle};
+                if let Ok(handle) = win.window_handle() {
+                    if let RawWindowHandle::Xlib(xh) = handle.as_raw() {
+                        let xid = xh.window as u32;
+                        if xid != 0 {
+                            *app.state::<AppState>().main_xid.lock().unwrap() = xid;
+                        }
+                    }
+                }
+            }
 
             // Bridge: meter peaks → emit pw-node-peak events
             let app_handle_meter = app.handle().clone();
@@ -278,6 +302,23 @@ fn main() {
             commands::soundboard_set_trim,
             commands::soundboard_play,
             commands::soundboard_stop_all,
+            commands::midi_carla_available,
+            commands::midi_channel_list,
+            commands::midi_channel_add,
+            commands::midi_channel_remove,
+            commands::midi_channel_rename,
+            commands::midi_plugin_add,
+            commands::midi_plugin_remove,
+            commands::midi_plugin_reorder,
+            commands::midi_channel_open_gui,
+            commands::midi_channel_close_gui,
+            commands::midi_plugin_show_native_gui,
+            commands::midi_plugin_hide_native_gui,
+            commands::midi_channel_sync_plugins,
+            commands::midi_plugin_embed_gui,
+            commands::midi_plugin_position_gui,
+            commands::midi_plugin_unembed_gui,
+            commands::midi_embed_available,
         ])
         .run(tauri::generate_context!())
         .expect("error running tauri application");

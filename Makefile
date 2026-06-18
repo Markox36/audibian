@@ -14,7 +14,7 @@ build:
 	cargo build
 
 release:
-	cargo build --release
+	cargo build --release --features custom-protocol
 
 # ── Run ────────────────────────────────────────────────────────────────────
 # `make dev`  — hot-reload workflow. Spawns vite via tauri.conf.json's
@@ -39,7 +39,7 @@ dev: kill
 # Order matters: a stale ui/dist results in the webview loading old assets.
 run: kill
 	cd ui && pnpm install --frozen-lockfile && pnpm run build
-	cargo build --release
+	cargo build --release --features custom-protocol
 	./target/release/audibian
 
 # ── Icons (PNG from SVG — requires rsvg-convert or inkscape) ───────────────

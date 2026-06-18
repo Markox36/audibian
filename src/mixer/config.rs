@@ -92,6 +92,76 @@ impl Default for SendRoute {
     }
 }
 
+/// One hosted plugin in a MIDI channel's chain. Persisted purely for
+/// audibian's bookkeeping (display label, order) — the real audio
+/// processing happens inside the Carla rack process; Carla owns the actual
+/// plugin instance + parameter state via its own project file.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct MidiPlugin {
+    pub id: u32,
+    pub name: String,
+    /// LV2 URI, or absolute path for VST2/VST3/CLAP.
+    pub identifier: String,
+    /// "LV2" | "VST2" | "VST3" | "CLAP" | "SFZ".
+    pub format: String,
+}
+
+/// MIDI/instrument strip. Like InputChannel but the source is a Carla
+/// rack rather than a hardware input. The rack's audio output is wired
+/// into `sink_name` (an audibian null-sink) so the rest of the mixer
+/// graph treats it identically to any other strip.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct MidiChannel {
+    pub id: u32,
+    pub name: String,
+    pub sink_name: String,
+    #[serde(default)]
+    pub order: u32,
+    #[serde(default)]
+    pub color: Option<String>,
+    #[serde(default = "default_true")]
+    pub send_to_master: bool,
+    #[serde(default = "default_pan")]
+    pub pan: f32,
+    #[serde(default = "default_fader")]
+    pub fader: f32,
+    #[serde(default)]
+    pub muted: bool,
+    #[serde(default)]
+    pub plugins: Vec<MidiPlugin>,
+    #[serde(default)]
+    pub next_plugin_id: u32,
+    /// OSC UDP port for talking to this channel's Carla instance.
+    /// Allocated lazily on first launch; reused across restarts so the
+    /// rosc client always knows where to reach the running rack.
+    #[serde(default)]
+    pub osc_udp_port: u16,
+    /// OSC TCP port for plugin-level Carla commands.
+    #[serde(default)]
+    pub osc_tcp_port: u16,
+}
+
+impl MidiChannel {
+    pub fn next_plugin_id(&mut self) -> u32 {
+        let id = self.next_plugin_id.max(1);
+        self.next_plugin_id = id + 1;
+        id
+    }
+    /// Path to the Carla rack project file backing this channel.
+    pub fn carla_project_path(&self) -> std::path::PathBuf {
+        let home = std::env::var("HOME").unwrap_or_else(|_| "/tmp".into());
+        std::path::PathBuf::from(home)
+            .join(".config/audibian/midi")
+            .join(format!("midi_{}.carxp", self.id))
+    }
+    /// JACK client name we ask Carla to advertise via PIPEWIRE_NODE_NAME.
+    /// Stable across restarts so `pw-link` can wire the chain on every
+    /// boot without having to enumerate Carla instances by PID.
+    pub fn carla_client_name(&self) -> String {
+        format!("audibian_midi_{}_host", self.id)
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MixerConfig {
     pub next_id: u32,
@@ -99,6 +169,8 @@ pub struct MixerConfig {
     pub input_channels: Vec<InputChannel>,
     #[serde(default)]
     pub return_channels: Vec<ReturnChannel>,
+    #[serde(default)]
+    pub midi_channels: Vec<MidiChannel>,
     #[serde(default)]
     pub sends: Vec<SendRoute>,
     pub master_sink: Option<String>,
@@ -120,6 +192,7 @@ impl Default for MixerConfig {
             next_id: 0,
             input_channels: Vec::new(),
             return_channels: Vec::new(),
+            midi_channels: Vec::new(),
             sends: Vec::new(),
             master_sink: None,
             global_scale: 1.0,
