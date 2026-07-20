@@ -2,10 +2,10 @@
 
 ![Audibian banner](banner.png)
 
-**Audibian** is an open-source desktop audio management application for Linux, built with Rust and GTK 4.  
-It provides a visual patchbay, per-application mixer, parametric EQ, noise suppression and persistent audio profiles — all on top of **PipeWire**.
+**Audibian** is an open-source desktop audio management application for Linux, built with **Rust and Tauri 2** (WebKitGTK shell, React frontend).  
+It provides a routing matrix, a full mixer with sends and returns, per-strip EQ, noise suppression, a soundboard, MIDI plugin hosting and persistent audio profiles — all on top of **PipeWire**.
 
-Tested on **Debian 12 (Bookworm)** with PipeWire ≥ 0.3.65.
+Tested on **Debian 13 (Trixie)** with PipeWire ≥ 1.2.
 
 ---
 
@@ -13,12 +13,14 @@ Tested on **Debian 12 (Bookworm)** with PipeWire ≥ 0.3.65.
 
 | Feature | Details |
 |---|---|
-| 🔌 **Visual Patchbay** | Drag-and-drop canvas to connect and disconnect audio nodes. Nodes are automatically arranged by type (sources → filters → sinks). |
-| 🎚️ **Per-app Mixer** | Volume fader and mute toggle for every active audio stream and device. |
-| 🎛️ **Parametric EQ** | 5-band parametric equaliser with real-time Cairo curve editor, applied via a PipeWire filter-chain virtual sink. |
+| 🔀 **Routing Matrix** | Grid view of the PipeWire graph. Toggle a cell to create or destroy a link between any output and input port. |
+| 🎚️ **Mixer** | Input strips, return buses and a master bus, each with fader, pan, mute, solo and stereo level meters. Sends route any input to any return. |
+| 🎛️ **Per-strip EQ** | Parametric EQ applied per strip through a PipeWire filter-chain virtual sink. |
 | 🎙️ **Noise Suppression** | Per-microphone WebRTC noise suppression. Creates a virtual clean source (`audibian-ns-…`) that any app can select instead of the raw mic. |
-| 💾 **Audio Profiles** | Save and restore complete audio states (links, volumes) as TOML files under `~/.config/audibian/profiles/`. |
-| ⚡ **Default Profile** | Mark a profile as default; Audibian will apply it automatically 3 seconds after startup, once PipeWire has enumerated all nodes. |
+| 🔊 **Soundboard** | Trigger sound files into a dedicated `audibian_soundboard` strip, with optional start/end trimming via ffmpeg. |
+| 🎹 **MIDI** | MIDI channel management with plugin hosting; plugin GUIs are reparented into the main window on X11. |
+| 💾 **Audio Profiles** | Save and restore complete audio states as TOML files under `~/.config/audibian/profiles/`. |
+| ⚡ **Persistent Routing** | `audibian --apply-persistent` recreates the whole graph headlessly. Ship it as a systemd user unit and your routing is live from login, with or without the GUI. |
 | 🚀 **Autostart** | One toggle creates an XDG autostart entry (`~/.config/autostart/audibian.desktop`) so Audibian launches with your desktop session. |
 
 ---
@@ -29,100 +31,152 @@ Tested on **Debian 12 (Bookworm)** with PipeWire ≥ 0.3.65.
 
 | Dependency | Minimum version | Debian package |
 |---|---|---|
-| PipeWire | 0.3.52 | `pipewire` |
-| PipeWire WebRTC AEC | — | `libspa-0.2-jack` or included in `pipewire-audio` |
-| GTK 4 | 4.12 | `libgtk-4-1` |
-| libadwaita | 1.5 | `libadwaita-1-0` |
+| PipeWire | 1.2 | `pipewire` |
+| PipeWire PulseAudio layer | — | `pipewire-pulse` (`pactl` is used for module management) |
+| WebKitGTK 4.1 | — | `libwebkit2gtk-4.1-0` |
+| GTK 3 | — | `libgtk-3-0` |
+| ffmpeg | — | `ffmpeg` (only for trimmed soundboard clips) |
 
-> **Noise suppression** uses `libpipewire-module-echo-cancel` with the WebRTC backend (`libspa-aec-webrtc`), which ships with PipeWire on Debian Bookworm — no extra packages needed.
+> **Noise suppression** uses `libpipewire-module-echo-cancel` with the WebRTC backend (`libspa-aec-webrtc`), which ships with PipeWire on Debian — no extra packages needed.
 
 ### Build
 
 | Dependency | Minimum version | Debian package |
 |---|---|---|
-| Rust + Cargo | 1.75 | [rustup.rs](https://rustup.rs) |
-| GTK 4 dev headers | 4.12 | `libgtk-4-dev` |
-| libadwaita dev headers | 1.5 | `libadwaita-1-dev` |
-| PipeWire dev headers | 0.3 | `libpipewire-0.3-dev` |
+| Rust + Cargo | 1.77 | [rustup.rs](https://rustup.rs) |
+| Node + pnpm | Node 20 | `nodejs`, then `npm i -g pnpm` |
+| WebKitGTK dev headers | 4.1 | `libwebkit2gtk-4.1-dev` |
+| GTK 3 dev headers | — | `libgtk-3-dev` |
+| PipeWire dev headers | 1.2 | `libpipewire-0.3-dev`, `libspa-0.2-dev` |
+| libclang (for bindgen) | — | `clang`, `libclang-dev` |
+| AppIndicator dev headers | — | `libayatana-appindicator3-dev` |
+| librsvg | — | `librsvg2-dev`, `librsvg2-bin` (icon generation) |
 | pkg-config | — | `pkg-config` |
-| Cairo dev headers | — | `libcairo2-dev` |
-| Pango dev headers | — | `libpango1.0-dev` |
 
 Install all build dependencies on Debian:
 
 ```bash
 sudo apt install \
-  libgtk-4-dev libadwaita-1-dev \
-  libpipewire-0.3-dev \
-  libcairo2-dev libpango1.0-dev \
-  pkg-config build-essential
+  build-essential pkg-config libssl-dev \
+  libwebkit2gtk-4.1-dev libgtk-3-dev libayatana-appindicator3-dev \
+  librsvg2-dev librsvg2-bin \
+  libpipewire-0.3-dev libspa-0.2-dev \
+  clang libclang-dev \
+  nodejs npm && npm install -g pnpm
 ```
+
+> The `pipewire` crate is built with the `v1_2_0` feature, so PipeWire headers
+> **1.2 or newer** are mandatory. Debian 12 (Bookworm) ships 0.3 and will not
+> build; use Debian 13 (Trixie) or newer.
 
 ---
 
 ## Installation
 
+### Pre-built AppImage
+
+Grab `Audibian-x86_64.AppImage` from the [latest release](https://github.com/Markox36/audibian/releases), make it executable and run it:
+
+```bash
+chmod +x Audibian-x86_64.AppImage
+./Audibian-x86_64.AppImage
+```
+
+On systems without FUSE 2 (`sudo apt install libfuse2` fixes it permanently):
+
+```bash
+APPIMAGE_EXTRACT_AND_RUN=1 ./Audibian-x86_64.AppImage
+```
+
 ### Build from source
 
 ```bash
-git clone https://github.com/YOUR_USERNAME/audibian.git
+git clone https://github.com/Markox36/audibian.git
 cd audibian
-cargo build --release
+make release
 ```
 
-The binary will be at `target/release/audibian`.
+`make release` builds the React frontend with pnpm and then compiles the
+binary with the `custom-protocol` feature, which is required outside
+`cargo tauri dev` — without it Tauri loads the vite dev server and you get a
+blank window. The binary lands at `target/release/audibian`.
 
-### Run directly
+### Install system-wide
 
 ```bash
-cargo run --release
+sudo make install            # binary, desktop entry and icons under /usr/local
+make install-autostart       # optional: launch with the desktop session
+make install-systemd         # optional: rebuild the routing graph at login
 ```
 
-### Install system-wide (optional)
+`make install-systemd` installs a user unit that runs
+`audibian --apply-persistent`, which recreates the virtual sinks, returns,
+master bus and EQs headlessly. Enable it with:
 
 ```bash
-sudo install -Dm755 target/release/audibian /usr/local/bin/audibian
+systemctl --user enable --now audibian-apply.service
+```
+
+### Packaging
+
+```bash
+make appimage   # Audibian-x86_64.AppImage (downloads linuxdeploy on demand)
+make deb        # requires cargo-deb
+make rpm        # requires cargo-generate-rpm
+make arch       # PKGBUILD under packaging/arch
 ```
 
 ---
 
 ## Usage
 
-### Patchbay
+The window is organised in tabs: **Matrix · Mixer · Soundboard · MIDI · Effects · Profiles · ⚙**.
 
-- **Drag** from an output port (blue) to an input port (orange) to create a link.
-- **Right-click** on a cable to remove the link.
-- Nodes are auto-arranged in columns: sources on the left, sinks on the right.
+### Matrix
+
+A grid of every output port (rows) against every input port (columns). Click a
+cell to create the link, click again to destroy it.
 
 ### Mixer
 
-Each detected audio stream gets a vertical fader and a mute button.  
-Volume changes are applied immediately via `pactl`.
+Input strips, return buses and the master bus. Each strip has a fader, pan,
+mute, solo and a stereo level meter. Sends route any input to any return, and
+each input can be toggled in or out of the master bus.
 
-### Effects / EQ
+Strips are backed by real PipeWire null-sinks named `audibian_<name>`, so any
+application can select them as its output device.
+
+### Soundboard
+
+Add sound files to the library and trigger them into the `audibian_soundboard`
+strip. Clips can be trimmed with start/end markers, in which case playback goes
+through an ffmpeg pipe.
+
+### MIDI
+
+Manage MIDI channels and host plugins. On X11 the plugin GUI is reparented into
+the Audibian window instead of floating separately.
+
+### Effects
 
 1. Select a **sink** from the drop-down.
 2. Adjust the 5-band EQ (Low Shelf · Peak × 3 · High Shelf).
-3. Click **Aplicar EQ** — a virtual sink `audibian-eq-<name>` will appear; route your apps to it.
-4. Click **Quitar EQ** to remove the virtual sink.
+3. Apply — a virtual sink `audibian-eq-<name>` appears; route your apps to it.
 
-### Noise Suppression
-
-1. Go to the **Efectos / EQ** tab, scroll to *Supresión de Ruido*.
-2. Toggle the switch next to any microphone.
-3. A virtual source `audibian-ns-<name>` will appear in the system.
-4. In your app (Discord, OBS, etc.) select that virtual source instead of the raw microphone.
+Noise suppression lives in the same tab: toggle the switch next to any
+microphone and a virtual source `audibian-ns-<name>` appears. Select it in
+Discord, OBS or similar instead of the raw microphone.
 
 ### Profiles
 
-1. Set up your desired audio routing in the Patchbay.
-2. Give the profile a name and click **Guardar estado actual**.
-3. Select a profile and click **Cargar** to restore it.
-4. Click **Predeterminado** to mark a profile as the startup profile (toggle to unset).
+Save the current routing and mixer state as a named profile, reload it later,
+or mark one as default so it is applied at startup once PipeWire has enumerated
+every node.
 
-### Autostart
+### Settings
 
-In the **Perfiles** tab → *Ajustes*, toggle **Iniciar con el sistema** to create or remove the XDG autostart entry for your desktop session.
+The ⚙ tab holds UI scaling, the low-latency PipeWire drop-in toggle and the
+autostart switch, which writes `~/.config/autostart/audibian.desktop`.
 
 ---
 
@@ -130,11 +184,16 @@ In the **Perfiles** tab → *Ajustes*, toggle **Iniciar con el sistema** to crea
 
 | Path | Purpose |
 |---|---|
-| `~/.config/audibian/config.toml` | App settings (default profile, autostart) |
+| `~/.config/audibian/config.toml` | App settings (default profile, autostart, low latency) |
+| `~/.config/audibian/mixer.toml` | Mixer layout: inputs, returns, sends, master |
+| `~/.config/audibian/matrix.toml` | Routing matrix state |
+| `~/.config/audibian/soundboard.toml` | Soundboard library |
+| `~/.config/audibian/midi/` | MIDI channel and plugin configuration |
 | `~/.config/audibian/profiles/*.toml` | Saved audio profiles |
 | `/tmp/audibian-eq-*.conf` | Ephemeral EQ filter-chain configs (cleaned up on start) |
 | `/tmp/audibian-ns-*.conf` | Ephemeral NS filter-chain configs (cleaned up on start) |
 | `~/.config/autostart/audibian.desktop` | XDG autostart entry (created by the app) |
+| `~/.config/systemd/user/audibian-apply.service` | Optional unit that rebuilds the graph at login |
 
 ---
 
@@ -142,27 +201,46 @@ In the **Perfiles** tab → *Ajustes*, toggle **Iniciar con el sistema** to crea
 
 ```
 src/
-├── main.rs                  # Entry point
+├── main.rs                  # Entry point, Tauri setup, PW event pump
+├── commands.rs              # #[tauri::command] surface exposed to the frontend
+├── state.rs                 # AppState shared with every command
+├── proc.rs                  # Detached subprocess spawning (reaps its children)
+├── persistent.rs            # Headless graph restoration (--apply-persistent)
+├── meter.rs                 # Stereo RMS level sampling per strip
+├── matrix_config.rs         # Routing matrix persistence
+├── soundboard.rs            # Sound library + playback
+├── x11_embed.rs             # Reparent MIDI plugin GUIs into the main window
 ├── audio/
 │   ├── graph.rs             # Audio graph model (nodes, ports, links)
-│   ├── pw_thread.rs         # PipeWire monitoring thread (registry listener)
+│   ├── pw_thread.rs         # PipeWire registry listener thread
 │   ├── eq.rs                # Biquad EQ math (Audio EQ Cookbook)
+│   ├── strip_eq.rs          # Per-strip EQ filter-chain instances
 │   └── effects.rs           # EQ & noise suppression subprocess management
-├── profiles/
-│   ├── model.rs             # AudioProfile serde model
-│   ├── store.rs             # TOML read/write under ~/.config/audibian/profiles/
-│   ├── apply.rs             # Profile apply & snapshot logic
-│   └── config.rs            # App settings (default profile, autostart)
-└── ui/
-    ├── app.rs               # Application entry, PW event loop
-    ├── window.rs            # Main window, tab switcher
-    ├── patchbay/            # Visual canvas (Cairo + GestureDrag)
-    ├── mixer/               # Volume strips
-    ├── effects/             # EQ curve + noise suppression list
-    └── profiles/            # Profile manager + settings
+├── mixer/
+│   ├── config.rs            # Inputs, returns, sends, master
+│   └── snapshot.rs          # Fader/mute/pan snapshot serialisation
+└── profiles/
+    ├── model.rs             # AudioProfile serde model
+    ├── store.rs             # TOML read/write under ~/.config/audibian/profiles/
+    ├── apply.rs             # Profile apply & snapshot logic
+    └── config.rs            # App settings (default profile, autostart)
+
+ui/                          # React frontend (vite + Tailwind)
+└── src/components/          # Matrix, Mixer, Soundboard, MidiChannels,
+                             # Effects, Profiles, Settings
 ```
 
-**Event flow:** PipeWire registry events arrive on a background thread and are forwarded to the GTK main thread via an `async_channel`. The GTK thread mutates the `AudioGraph` (wrapped in `Rc<RefCell>`) and triggers UI refreshes.
+**Event flow:** PipeWire registry events arrive on a background thread
+(`audio/pw_thread.rs`) and are forwarded over an `async_channel` to the Tauri
+main thread, which mutates the `AudioGraph` behind an `Arc<Mutex<…>>` and emits
+events to the React frontend. The frontend never talks to PipeWire directly; it
+calls `#[tauri::command]` functions.
+
+**Graph mutation** happens through `pw-link`, `pactl` and `pw-cli`
+subprocesses rather than the PipeWire API. Those are launched via
+`proc::CommandExt::spawn_detached`, which parks each child in a registry and
+reaps it on the next call — `std::process::Child` does not reap on drop, so a
+plain `let _ = Command::spawn()` would leak a zombie per routing change.
 
 ---
 
@@ -175,11 +253,17 @@ Contributions are welcome! Please open an issue before starting large features.
 3. Commit your changes
 4. Open a Pull Request
 
+Every push and pull request runs the CI workflow (build, clippy and tests in a
+Debian trixie container). Pushing a `v*` tag additionally builds the AppImage
+and publishes it as a GitHub Release.
+
 ### Code style
 
 - Run `cargo clippy` before submitting.
 - No panics in production paths — use `Option`/`Result` and log errors.
-- UI state lives on the GTK main thread only; never send GTK objects across threads.
+- Never `let _ = Command::spawn()`. Use `proc::CommandExt::spawn_detached` for
+  fire-and-forget subprocesses, or keep the `Child` and reap it yourself —
+  dropping it leaks a zombie.
 
 ---
 
@@ -192,7 +276,8 @@ See [LICENSE](LICENSE) for details.
 
 ## Acknowledgements
 
-- [Helvum](https://gitlab.freedesktop.org/pipewire/helvum) — inspiration for the patchbay concept.
+- [Helvum](https://gitlab.freedesktop.org/pipewire/helvum) — inspiration for the routing matrix concept.
 - [PipeWire](https://pipewire.org/) — the audio/video server powering this app.
-- [gtk4-rs](https://gtk-rs.org/) — Rust bindings for GTK 4.
-- [libadwaita-rs](https://world.pages.gitlab.gnome.org/Rust/libadwaita-rs/) — GNOME HIG widgets for Rust.
+- [pipewire-rs](https://gitlab.freedesktop.org/pipewire/pipewire-rs) — Rust bindings for PipeWire.
+- [Tauri](https://tauri.app/) — the desktop shell.
+- [linuxdeploy](https://github.com/linuxdeploy/linuxdeploy) — AppImage packaging.
