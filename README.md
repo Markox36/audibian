@@ -257,6 +257,23 @@ Every push and pull request runs the CI workflow (build, clippy and tests in a
 Debian trixie container). Pushing a `v*` tag additionally builds the AppImage
 and publishes it as a GitHub Release.
 
+### Working on the UI
+
+```bash
+cd ui && pnpm dev:mock     # http://127.0.0.1:5199/?tab=mixer
+```
+
+This serves the frontend in a plain browser with `@tauri-apps/api` swapped for
+the fixtures in `ui/src/dev/`, so the mixer renders with a realistic set of
+channels and animated meters. Resize the window freely to check the responsive
+bounds.
+
+Prefer it to `cargo tauri dev` while an Audibian instance is already running:
+a second real instance competes for the PipeWire graph and leaves duplicate
+`pactl` modules behind. The mock never touches PipeWire.
+
+`?tab=<id>` opens a specific tab — handy for screenshots.
+
 ### Code style
 
 - Run `cargo clippy` before submitting.

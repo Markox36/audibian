@@ -11,8 +11,16 @@ import Settings from './components/Settings'
 import Soundboard from './components/Soundboard'
 import MidiChannels from './components/MidiChannels'
 
+const TAB_IDS = ['matrix', 'mixer', 'soundboard', 'midi', 'effects', 'profiles', 'settings']
+
 export default function App() {
-  const [activeTab, setActiveTab] = useState('matrix')
+  // `?tab=mixer` opens straight onto a tab. Harmless in the packaged app,
+  // and it lets the mocked dev server (AUDIBIAN_UI_MOCK=1) be screenshotted
+  // on a specific tab without clicking through the UI.
+  const [activeTab, setActiveTab] = useState(() => {
+    const wanted = new URLSearchParams(window.location.search).get('tab')
+    return TAB_IDS.includes(wanted) ? wanted : 'matrix'
+  })
   const [graph, setGraph] = useState({ nodes: [], ports: [], links: [] })
   const [pwConnected, setPwConnected] = useState(true)
   const [uiScale, setUiScale] = useState(1.0)

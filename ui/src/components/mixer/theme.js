@@ -25,9 +25,17 @@ export const ROW_HEIGHTS = {
   output:  '30px',
   pan:     '46px',
   volume:  '26px',
-  meter:   'clamp(150px, 42vh, 560px)',
+  meter:   'minmax(150px, 1fr)',
   exclude: '40px',
 }
+
+// Height of everything except the meter, gaps and padding included. The grid
+// container caps itself at ROWS_FIXED + METER_MAX so the meter can take the
+// slack on short windows without ballooning on tall ones — as a bare `1fr` it
+// grew to ~650px of empty meter on a maximized window.
+export const ROWS_FIXED = 236 + 24 + 28
+export const METER_MAX = 560
+export const GRID_MAX_HEIGHT = `${ROWS_FIXED + METER_MAX}px`
 
 export const GRID_TEMPLATE = [
   ROW_HEIGHTS.input,

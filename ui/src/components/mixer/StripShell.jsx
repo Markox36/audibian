@@ -12,7 +12,12 @@ function StripFrame({ accent, children, dragClasses, style, onDragOver, onDragLe
       style={{
         gridRow: 'span 7',
         gridTemplateRows: 'subgrid',
-        gridTemplateColumns: '1fr',
+        // `minmax(0, 1fr)`, not `1fr`: grid items default to `min-width: auto`,
+        // so the meter row's dB rail imposed a min-content width wider than the
+        // strip. That widened the column for every row, and `overflow: hidden`
+        // then clipped the right-hand side — the solo button vanished and the
+        // controls looked shifted. minmax(0, …) lets the column shrink.
+        gridTemplateColumns: 'minmax(0, 1fr)',
         width: '100%',
         minWidth: 0,
         overflow: 'hidden',

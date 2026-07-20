@@ -2,7 +2,7 @@ import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react'
 import { invoke } from '@tauri-apps/api/core'
 import { listen } from '@tauri-apps/api/event'
 import { Plus, Sparkles, X, Activity } from 'lucide-react'
-import { CREAM, FAINT, GREEN, GRID_TEMPLATE, PANEL_BG, RAIL_TEXT, RAIL_WIDTH, STRIP_BG, STRIP_WIDTH } from './theme'
+import { CREAM, FAINT, GREEN, GRID_MAX_HEIGHT, GRID_TEMPLATE, PANEL_BG, RAIL_TEXT, RAIL_WIDTH, STRIP_BG, STRIP_WIDTH } from './theme'
 import { ConfigModal } from './ConfigModal'
 import { HeaderRail } from './HeaderRail'
 import { InputStrip } from './InputStrip'
@@ -232,6 +232,7 @@ export default function Mixer({ graph }) {
             // Rows are capped, so without this the grid stretches to fill the
             // window and every strip grows with it. Pin them to the top.
             alignContent: 'start',
+            maxHeight: GRID_MAX_HEIGHT,
             padding: '0.75em 1em 1em 1em',
             rowGap: 4,
             columnGap: 8,
