@@ -16,8 +16,17 @@ const STRIP_BG    = 'rgba(255, 255, 255, 0.02)'
 const RAIL_TEXT   = 'rgba(255, 255, 255, 0.4)'
 const FAINT       = 'rgba(255, 255, 255, 0.06)'
 
-// Subgrid template: Input | Sends | Output | Pan | Volume | Meter (1fr) | Exclude
-const GRID_TEMPLATE = '32px 76px 32px 52px 30px minmax(220px, 1fr) 48px'
+// Subgrid template: Input | Sends | Output | Pan | Volume | Meter | Exclude
+//
+// The meter row is capped instead of being a bare `1fr`: on a maximized
+// window `1fr` swallowed every spare pixel and produced ~650px of empty
+// meter, which is what made the whole mixer look oversized. It still grows
+// on short windows, it just stops at a sane height.
+const GRID_TEMPLATE = '30px 64px 30px 46px 26px minmax(180px, 560px) 40px'
+
+// Wide enough for the full control row (mute + solo + remove) and the two
+// volume readouts. At the previous 86px the strip clipped them away.
+const STRIP_WIDTH = '106px'
 
 const DB_TICKS = [0, 6, 12, 18, 24, 30, 36, 42, 48, 54]
 
@@ -751,7 +760,7 @@ function HeaderRail() {
         gridTemplateRows: 'subgrid',
         padding: '4px 6px 6px 6px',
         borderTop: '2px solid transparent',
-        minWidth: 64,
+        minWidth: 72,
       }}
     >
       {cells.map((c, i) => (
@@ -1060,9 +1069,12 @@ export default function Mixer({ graph }) {
             display: 'grid',
             gridTemplateRows: GRID_TEMPLATE,
             gridAutoFlow: 'column dense',
-            gridAutoColumns: '86px',
-            gridTemplateColumns: '64px',
+            gridAutoColumns: STRIP_WIDTH,
+            gridTemplateColumns: '72px',
             justifyContent: 'start',
+            // Rows are capped, so without this the grid stretches to fill the
+            // window and every strip grows with it. Pin them to the top.
+            alignContent: 'start',
             padding: '0.75em 1em 1em 1em',
             rowGap: 4,
             columnGap: 8,
