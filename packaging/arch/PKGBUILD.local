@@ -1,0 +1,34 @@
+# Maintainer: Markox36 <kenabotai@outlook.com>
+# Local build — uses current working tree, no download.
+# Build:  makepkg -f -p PKGBUILD.local
+pkgname=audibian
+pkgver=0.1.0
+pkgrel=1
+pkgdesc="Audio manager for PipeWire — patchbay, mixer, EQ and profiles"
+arch=('x86_64')
+url="https://github.com/Markox36/audibian"
+license=('GPL3')
+depends=('pipewire' 'pipewire-pulse' 'webkit2gtk-4.1' 'gtk3' 'librsvg')
+makedepends=('cargo' 'pnpm' 'nodejs' 'pkgconf')
+options=('!strip' '!debug')
+
+build() {
+    cd "$startdir/../.."
+    (cd ui && pnpm install --frozen-lockfile && pnpm run build)
+    cargo build --release
+}
+
+package() {
+    cd "$startdir/../.."
+    install -Dm755 "target/release/audibian" "$pkgdir/usr/bin/audibian"
+    install -Dm644 "data/audibian.desktop" "$pkgdir/usr/share/applications/audibian.desktop"
+    install -Dm644 "data/icons/scalable/apps/audibian.svg" \
+        "$pkgdir/usr/share/icons/hicolor/scalable/apps/audibian.svg"
+    for size in 16 24 32 48 64 128 256; do
+        src="data/icons/${size}x${size}/apps/audibian.png"
+        [ -f "$src" ] && install -Dm644 "$src" \
+            "$pkgdir/usr/share/icons/hicolor/${size}x${size}/apps/audibian.png"
+    done
+    install -Dm644 LICENSE "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
+    install -Dm644 README.md "$pkgdir/usr/share/doc/$pkgname/README.md"
+}

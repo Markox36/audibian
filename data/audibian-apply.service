@@ -1,0 +1,17 @@
+[Unit]
+Description=Audibian — apply persistent audio routing (virtual sinks, returns, EQs)
+After=pipewire.service pipewire-pulse.service wireplumber.service
+Wants=pipewire.service pipewire-pulse.service wireplumber.service
+PartOf=graphical-session.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+# KillMode=process keeps the cgroup alive after audibian exits so the
+# EQ filter-chain pipewire child processes survive and keep applying EQ
+# to virtual sinks. They are reparented to systemd --user.
+KillMode=process
+ExecStart=/usr/bin/audibian --apply-persistent
+
+[Install]
+WantedBy=graphical-session.target

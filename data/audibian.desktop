@@ -1,0 +1,16 @@
+[Desktop Entry]
+Version=1.0
+Type=Application
+Name=Audibian
+GenericName=Audio Manager
+Comment=Gestor de audio PipeWire — patchbay, mixer, EQ y perfiles
+Exec=audibian
+Icon=audibian
+Terminal=false
+Categories=AudioVideo;Audio;GTK;
+Keywords=audio;pipewire;patchbay;mixer;eq;equalizer;noise;profiles;
+StartupWMClass=audibian
+StartupNotify=true
+X-GNOME-Autostart-Delay=5
+X-KDE-autostart-after=panel
+X-MATE-Autostart-Delay=5
