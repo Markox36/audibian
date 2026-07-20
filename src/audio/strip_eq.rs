@@ -35,6 +35,7 @@ impl StripEqInstance {
 impl Drop for StripEqInstance {
     fn drop(&mut self) {
         let _ = self.process.kill();
+        let _ = self.process.wait();
         let _ = std::fs::remove_file(&self.config_path);
         info!("Strip EQ for '{}' stopped", self.strip_sink);
     }

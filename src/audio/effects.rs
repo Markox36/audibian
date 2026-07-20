@@ -29,6 +29,9 @@ impl EqInstance {
 impl Drop for EqInstance {
     fn drop(&mut self) {
         let _ = self.process.kill();
+        // `kill` only signals. Without the wait the filter-chain child stays
+        // defunct for the rest of the session. SIGKILL, so this returns at once.
+        let _ = self.process.wait();
         let _ = std::fs::remove_file(&self.config_path);
         info!(
             "EQ instance for '{}' stopped",
@@ -123,6 +126,7 @@ impl NsInstance {
 impl Drop for NsInstance {
     fn drop(&mut self) {
         let _ = self.process.kill();
+        let _ = self.process.wait();
         let _ = std::fs::remove_file(&self.config_path);
         info!("Noise suppression for '{}' stopped", self.source_name);
     }

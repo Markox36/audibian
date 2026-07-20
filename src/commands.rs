@@ -1802,7 +1802,7 @@ pub fn soundboard_play(state: State<AppState>, id: u32) {
             procs.push(ff);
             procs.push(pap);
         }
-        Err(_) => { let _ = ff.kill(); }
+        Err(_) => { let _ = ff.kill(); let _ = ff.wait(); }
     }
 }
 
@@ -1811,6 +1811,9 @@ pub fn soundboard_stop_all(state: State<AppState>) {
     let mut procs = state.soundboard_procs.lock().unwrap();
     for child in procs.iter_mut() {
         let _ = child.kill();
+        // Reap before `clear` drops the handles, otherwise every stopped
+        // sound leaves a defunct paplay/ffmpeg behind.
+        let _ = child.wait();
     }
     procs.clear();
 }
@@ -1847,14 +1850,16 @@ fn probe_duration_ms(path: &std::path::Path) -> Option<u32> {
 /// "Open in Carla" button and surface an install hint when missing.
 #[tauri::command]
 pub fn midi_carla_available() -> bool {
+    // `status` runs the probe to completion and reaps it. The previous
+    // spawn-then-kill left a defunct `carla` behind on every check, and the
+    // check runs whenever the MIDI tab is opened.
     std::process::Command::new("carla")
         .arg("--version")
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null())
-        .spawn()
-        .map(|mut c| { let _ = c.kill(); true })
-        .unwrap_or(false)
+        .status()
+        .is_ok()
 }
 
 #[tauri::command]
@@ -1910,9 +1915,12 @@ pub fn midi_channel_add(state: State<AppState>, name: Option<String>) -> Option<
 
 #[tauri::command]
 pub fn midi_channel_remove(state: State<AppState>, id: u32) {
-    // Kill any running Carla rack for this channel.
+    // Kill any running Carla rack for this channel. `kill` only sends the
+    // signal; without the `wait` the child stays defunct forever once the
+    // handle is dropped here.
     if let Some(mut child) = state.midi_carla_procs.lock().unwrap().remove(&id) {
         let _ = child.kill();
+        let _ = child.wait();
     }
 
     let sink_name = {
@@ -2238,6 +2246,8 @@ pub fn midi_channel_open_gui(state: State<AppState>, id: u32) -> bool {
 pub fn midi_channel_close_gui(state: State<AppState>, id: u32) {
     if let Some(mut child) = state.midi_carla_procs.lock().unwrap().remove(&id) {
         let _ = child.kill();
+        // `kill` does not reap; drop alone would leave a zombie behind.
+        let _ = child.wait();
     }
 }
 
