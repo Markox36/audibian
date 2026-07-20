@@ -32,7 +32,7 @@ impl Drop for MeterHandle {
 
 struct UserData {
     format: AudioInfoRaw,
-    tx: async_channel::Sender<(String, f32)>,
+    tx: async_channel::Sender<(String, f32, f32)>,
     event_key: String,
     stop: Arc<AtomicBool>,
     main_loop: MainLoopRc,
@@ -46,7 +46,7 @@ struct UserData {
 pub fn spawn_meter(
     target_id: u32,
     event_key: String,
-    tx: async_channel::Sender<(String, f32)>,
+    tx: async_channel::Sender<(String, f32, f32)>,
 ) -> Option<MeterHandle> {
     let stop = Arc::new(AtomicBool::new(false));
     let stop_clone = stop.clone();
@@ -62,7 +62,7 @@ pub fn spawn_meter(
 fn run_meter(
     target_id: u32,
     event_key: String,
-    tx: async_channel::Sender<(String, f32)>,
+    tx: async_channel::Sender<(String, f32, f32)>,
     stop: Arc<AtomicBool>,
 ) {
     let main_loop = match MainLoopRc::new(None) {
@@ -141,26 +141,43 @@ fn run_meter(
             let n_samples = chunk_size / 4; // f32 = 4 bytes
             if n_samples == 0 { return; }
 
-            let rms = if let Some(bytes) = d.data() {
+            let channels = ud.format.channels().max(1) as usize;
+
+            let (rms_l, rms_r) = if let Some(bytes) = d.data() {
                 let audio = &bytes[chunk_offset..chunk_offset + chunk_size];
-                let sum_sq: f32 = audio.chunks_exact(4)
-                    .map(|b| {
-                        let v = f32::from_le_bytes([b[0], b[1], b[2], b[3]]);
-                        if v.is_finite() { v * v } else { 0.0 }
-                    })
-                    .sum();
-                (sum_sq / n_samples as f32).sqrt()
+                let frames = n_samples / channels;
+                if frames == 0 { return; }
+
+                let mut sum_sq_l = 0.0_f32;
+                let mut sum_sq_r = 0.0_f32;
+                for frame in audio.chunks_exact(4 * channels) {
+                    let l_bytes = &frame[0..4];
+                    let v_l = f32::from_le_bytes([l_bytes[0], l_bytes[1], l_bytes[2], l_bytes[3]]);
+                    if v_l.is_finite() { sum_sq_l += v_l * v_l; }
+
+                    if channels >= 2 {
+                        let r_bytes = &frame[4..8];
+                        let v_r = f32::from_le_bytes([r_bytes[0], r_bytes[1], r_bytes[2], r_bytes[3]]);
+                        if v_r.is_finite() { sum_sq_r += v_r * v_r; }
+                    }
+                }
+                let f = frames as f32;
+                let r_l = (sum_sq_l / f).sqrt();
+                let r_r = if channels >= 2 { (sum_sq_r / f).sqrt() } else { r_l };
+                (r_l, r_r)
             } else {
                 return;
             };
 
-            let db = if rms > 1e-9 {
+            let to_db = |rms: f32| if rms > 1e-9 {
                 (20.0_f32 * rms.log10()).clamp(-60.0, 0.0)
             } else {
                 -60.0
             };
+            let db_l = to_db(rms_l);
+            let db_r = to_db(rms_r);
 
-            if ud.tx.send_blocking((ud.event_key.clone(), db)).is_err() {
+            if ud.tx.send_blocking((ud.event_key.clone(), db_l, db_r)).is_err() {
                 ud.main_loop.quit();
             }
         })

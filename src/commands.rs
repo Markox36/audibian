@@ -1067,6 +1067,104 @@ pub fn move_app_to_strip(stream_id: u32, sink_name: String) {
     move_stream_to_sink(stream_id, &sink_name);
 }
 
+/// Parse `pactl list sink-inputs` and return `(sink_input_id, app_name, owner_module_id, current_sink)` tuples.
+fn list_sink_inputs() -> Vec<(u32, String, Option<u32>, Option<u32>)> {
+    let Ok(out) = std::process::Command::new("pactl").args(["list", "sink-inputs"]).output() else {
+        return Vec::new();
+    };
+    let text = String::from_utf8_lossy(&out.stdout);
+    let mut result = Vec::new();
+    let mut id: Option<u32> = None;
+    let mut module: Option<u32> = None;
+    let mut sink: Option<u32> = None;
+    let mut app: String = String::new();
+
+    let push = |result: &mut Vec<_>, id: Option<u32>, app: &str, module: Option<u32>, sink: Option<u32>| {
+        if let Some(id) = id {
+            result.push((id, app.to_string(), module, sink));
+        }
+    };
+
+    for line in text.lines() {
+        let trimmed = line.trim();
+        if let Some(rest) = trimmed.strip_prefix("Sink Input #") {
+            push(&mut result, id, &app, module, sink);
+            id = rest.parse().ok();
+            module = None;
+            sink = None;
+            app.clear();
+        } else if let Some(rest) = trimmed.strip_prefix("Module: ") {
+            module = rest.trim().parse().ok();
+        } else if let Some(rest) = trimmed.strip_prefix("Sink: ") {
+            sink = rest.trim().parse().ok();
+        } else if let Some(rest) = trimmed.strip_prefix("application.name = ") {
+            app = rest.trim().trim_matches('"').to_string();
+        } else if app.is_empty() {
+            if let Some(rest) = trimmed.strip_prefix("application.process.binary = ") {
+                app = rest.trim().trim_matches('"').to_string();
+            }
+        }
+    }
+    push(&mut result, id, &app, module, sink);
+    result
+}
+
+/// Resolve a sink name (`audibian_xxx`) to its current pactl sink id, if alive.
+fn sink_name_to_id(name: &str) -> Option<u32> {
+    let out = std::process::Command::new("pactl").args(["list", "short", "sinks"]).output().ok()?;
+    let text = String::from_utf8_lossy(&out.stdout);
+    for line in text.lines() {
+        let mut cols = line.split_whitespace();
+        let id = cols.next()?.parse::<u32>().ok()?;
+        let sink_name = cols.next()?;
+        if sink_name == name {
+            return Some(id);
+        }
+    }
+    None
+}
+
+/// Reroute every existing app playback stream that is NOT already pointed at
+/// one of our virtual sinks. Used at startup so apps that were already playing
+/// (Spotify, browser, etc.) don't stay stuck on the old default sink.
+#[tauri::command]
+pub fn reroute_existing_streams(state: State<AppState>) -> usize {
+    let cfg = state.mixer_config.lock().unwrap().clone();
+
+    // Build a set of pactl sink ids that belong to Audibian so we don't bounce
+    // already-routed streams.
+    let mut audibian_sinks: std::collections::HashSet<u32> = std::collections::HashSet::new();
+    for c in &cfg.input_channels {
+        if let Some(id) = sink_name_to_id(&c.sink_name) {
+            audibian_sinks.insert(id);
+        }
+    }
+    for r in &cfg.return_channels {
+        if let Some(id) = sink_name_to_id(&r.sink_name) {
+            audibian_sinks.insert(id);
+        }
+    }
+    if let Some(id) = sink_name_to_id(MASTER_SINK_NAME) {
+        audibian_sinks.insert(id);
+    }
+
+    // Skip our own internal modules (loopbacks, master loopback, send loopbacks).
+    let mut moved = 0;
+    for (si_id, app_name, _module, cur_sink) in list_sink_inputs() {
+        if app_name.starts_with("audibian") || app_name == "Loopback" || app_name == "Loopback Streams" {
+            continue;
+        }
+        if let Some(s) = cur_sink {
+            if audibian_sinks.contains(&s) { continue; }
+        }
+        if let Some(sink) = pick_strip_sink_for_app(&cfg, &app_name) {
+            move_stream_to_sink(si_id, &sink);
+            moved += 1;
+        }
+    }
+    moved
+}
+
 #[tauri::command]
 pub fn set_input_match_rules(state: State<AppState>, id: u32, rules: Vec<String>) {
     let mut cfg = state.mixer_config.lock().unwrap();
@@ -1211,12 +1309,18 @@ pub fn create_remap_source(monitor_name: &str, source_name: &str, description: &
 }
 
 pub fn create_loopback(source: &str, sink: &str) -> Option<u32> {
+    // latency_msec is the loopback module's internal target buffer, NOT the
+    // user-visible end-to-end latency (PipeWire's quantum dictates that). A
+    // value below ~1.5× quantum forces the loopback to refill faster than
+    // the graph schedules it → snd_pcm_mmap_commit EPIPE storms on whichever
+    // ALSA device sits at the end of the chain. 20ms covers quantum up to
+    // 1024 samples @ 48k with margin and does not add audible delay.
     let out = std::process::Command::new("pactl")
         .args([
             "load-module", "module-loopback",
             &format!("source={}", source),
             &format!("sink={}", sink),
-            "latency_msec=1",
+            "latency_msec=20",
         ])
         .output()
         .ok()?;
@@ -1263,7 +1367,8 @@ pub fn create_source_loopback(source: &str, sink: &str, mono: bool) -> Option<u3
         "module-loopback".to_string(),
         format!("source={}", source),
         format!("sink={}", sink),
-        "latency_msec=1".to_string(),
+        // See create_loopback above for rationale on this value.
+        "latency_msec=20".to_string(),
     ];
     if mono {
         args.push("channels=1".to_string());

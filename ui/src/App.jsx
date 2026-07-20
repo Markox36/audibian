@@ -129,21 +129,21 @@ export default function App() {
         </div>
       )}
 
-      <header className="flex items-center justify-between px-4 shrink-0 h-11 border-b border-white/[0.08] bg-white/[0.05]">
-        <div className="flex items-center gap-5">
-          <span className="text-sm font-bold tracking-[0.12em] uppercase text-[#4169e1]">
+      <header className="flex flex-wrap items-center justify-between gap-2 px-3 sm:px-4 py-1.5 shrink-0 min-h-11 border-b border-white/[0.08] bg-gradient-to-b from-white/[0.07] to-white/[0.02]">
+        <div className="flex items-center gap-3 sm:gap-5 min-w-0 flex-wrap">
+          <span className="text-sm font-bold tracking-[0.12em] uppercase text-[#4169e1] shrink-0">
             Audibian
           </span>
 
-          <nav className="flex items-center gap-0.5 p-0.5 rounded-lg bg-white/[0.09] border border-white/[0.08]">
+          <nav className="flex items-center gap-0.5 p-0.5 rounded-lg bg-white/[0.09] border border-white/[0.08] overflow-x-auto max-w-full">
             {tabs.map(t => (
               <button
                 key={t.id}
                 onClick={() => setActiveTab(t.id)}
-                className={`px-3.5 py-1 rounded-md text-xs font-semibold tracking-wider uppercase transition-all duration-150 outline-none ${
+                className={`px-2 sm:px-3.5 py-1 rounded-md text-[10px] sm:text-xs font-semibold tracking-wider uppercase transition-all duration-150 outline-none shrink-0 ${
                   activeTab === t.id
                     ? 'bg-[#4169e1] text-white shadow-[0_1px_3px_rgba(65,105,225,0.35)]'
-                    : 'bg-transparent text-[#7a7a7a]'
+                    : 'bg-transparent text-[#7a7a7a] hover:text-neutral-200'
                 }`}
               >
                 {t.label}
@@ -152,7 +152,7 @@ export default function App() {
           </nav>
         </div>
 
-        <div className="flex items-center gap-3 text-xs font-mono text-[#7a7a7a]">
+        <div className="hidden sm:flex items-center gap-3 text-xs font-mono text-[#7a7a7a]">
           <span>Tauri-Engine v2.0</span>
           <span className="h-3 w-px bg-white/[0.08] inline-block" />
           <span className="flex items-center gap-1.5 text-[#38b868]">

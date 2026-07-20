@@ -68,7 +68,7 @@ fn main() {
             let pw = Arc::new(PwThread::spawn(pw_event_tx));
 
             // Meter channel
-            let (meter_tx, meter_rx) = async_channel::unbounded::<(String, f32)>();
+            let (meter_tx, meter_rx) = async_channel::unbounded::<(String, f32, f32)>();
             let meter_handles = Arc::new(Mutex::new(HashMap::<String, meter::MeterHandle>::new()));
 
             // Re-apply low-latency PipeWire drop-in if user enabled it last session.
@@ -167,10 +167,12 @@ fn main() {
             // Bridge: meter peaks → emit pw-node-peak events
             let app_handle_meter = app.handle().clone();
             tauri::async_runtime::spawn(async move {
-                while let Ok((node_name, db)) = meter_rx.recv().await {
+                while let Ok((node_name, db_l, db_r)) = meter_rx.recv().await {
                     app_handle_meter.emit("pw-node-peak", serde_json::json!({
                         "node_name": node_name,
-                        "db": db
+                        "db": ((db_l + db_r) * 0.5),
+                        "db_l": db_l,
+                        "db_r": db_r,
                     })).ok();
                 }
             });
@@ -192,6 +194,21 @@ fn main() {
                 if let Some(name) = cfg.default_profile {
                     let _ = app_handle2.emit("default-profile", name);
                 }
+            });
+
+            // Reroute apps already playing when Audibian launched (Spotify,
+            // browser, etc). Done in two passes — first once virtual sinks
+            // are live, then again after the default profile has reapplied
+            // its matrix so streams land on the strip the user expects.
+            let app_handle_rr = app.handle().clone();
+            std::thread::spawn(move || {
+                use crate::state::AppState;
+                std::thread::sleep(std::time::Duration::from_millis(2500));
+                let state = app_handle_rr.state::<AppState>();
+                let _ = crate::commands::reroute_existing_streams(state);
+                std::thread::sleep(std::time::Duration::from_millis(2500));
+                let state = app_handle_rr.state::<AppState>();
+                let _ = crate::commands::reroute_existing_streams(state);
             });
 
             // Tray icon: hide window on close, expose Show/Quit menu, run a
@@ -279,6 +296,7 @@ fn main() {
             commands::set_master_pan,
             commands::set_master_mute,
             commands::move_app_to_strip,
+            commands::reroute_existing_streams,
             commands::set_input_match_rules,
             commands::set_input_is_default,
             commands::set_strip_eq,
