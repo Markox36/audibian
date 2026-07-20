@@ -4,7 +4,7 @@ DATADIR := $(PREFIX)/share
 
 ICON_SIZES := 16 24 32 48 64 128 256
 
-.PHONY: all build release dev run kill install uninstall install-autostart uninstall-autostart install-systemd uninstall-systemd icons deb rpm arch arch-docker appimage clean
+.PHONY: all build ui release dev run kill install uninstall install-autostart uninstall-autostart install-systemd uninstall-systemd icons deb rpm arch arch-docker appimage clean
 
 # ── Build ──────────────────────────────────────────────────────────────────
 
@@ -13,7 +13,13 @@ all: build
 build:
 	cargo build
 
-release:
+# The UI bundle must exist before cargo runs: tauri-build resolves
+# `frontendDist: ui/dist` at compile time, and ui/dist is not in the
+# repository. A stale bundle silently ships old assets, so always rebuild.
+ui:
+	cd ui && pnpm install --frozen-lockfile && pnpm run build
+
+release: ui
 	cargo build --release --features custom-protocol
 
 # ── Run ────────────────────────────────────────────────────────────────────
@@ -34,12 +40,9 @@ kill:
 dev: kill
 	cargo tauri dev
 
-# Build UI bundle FIRST so tauri's release binary serves the latest
-# ui/dist at runtime. Then build the rust release binary. Then launch.
-# Order matters: a stale ui/dist results in the webview loading old assets.
-run: kill
-	cd ui && pnpm install --frozen-lockfile && pnpm run build
-	cargo build --release --features custom-protocol
+# `release` rebuilds the UI bundle first, so the webview always serves the
+# current assets rather than a stale ui/dist.
+run: kill release
 	./target/release/audibian
 
 # ── Icons (PNG from SVG — requires rsvg-convert or inkscape) ───────────────
