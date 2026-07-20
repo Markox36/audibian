@@ -225,10 +225,19 @@ export default function Mixer({ graph }) {
           style={{
             display: 'grid',
             gridTemplateRows: GRID_TEMPLATE,
-            gridAutoFlow: 'column dense',
-            gridAutoColumns: STRIP_WIDTH,
-            gridTemplateColumns: RAIL_WIDTH,
-            justifyContent: 'start',
+            gridAutoFlow: 'column',
+            // Columns are declared explicitly rather than left to
+            // `gridAutoColumns`, because the spacer between the input block and
+            // the return block has to be a flexible track while the strips stay
+            // fixed. Auto columns would force one size on all of them.
+            gridTemplateColumns: [
+              RAIL_WIDTH,
+              `repeat(${sortedInputs.length}, ${STRIP_WIDTH})`,
+              // Pushes returns to the right edge, and collapses to just the
+              // divider once enough strips exist to fill the row.
+              'minmax(17px, 1fr)',
+              `repeat(${sortedReturns.length + 1}, ${STRIP_WIDTH})`,
+            ].join(' '),
             // Rows are capped, so without this the grid stretches to fill the
             // window and every strip grows with it. Pin them to the top.
             alignContent: 'start',
@@ -236,8 +245,10 @@ export default function Mixer({ graph }) {
             padding: '0.75em 1em 1em 1em',
             rowGap: 4,
             columnGap: 8,
-            width: 'max-content',
-            minWidth: '100%',
+            width: '100%',
+            // Never below the strips' own width: the parent scrolls instead of
+            // squeezing them, which is what keeps the controls reachable.
+            minWidth: 'max-content',
           }}
         >
           <HeaderRail />
@@ -270,6 +281,33 @@ export default function Mixer({ graph }) {
               />
             )
           })}
+
+          {/* Divider between the input block and the return/master block. */}
+          <div className="relative" style={{ gridRow: '1 / -1' }} aria-hidden="true">
+            <div
+              className="absolute inset-y-0 left-1/2 w-px -translate-x-1/2"
+              style={{
+                background:
+                  'linear-gradient(to bottom, transparent, rgba(255,255,255,0.26) 10%, rgba(255,255,255,0.26) 90%, transparent)',
+                boxShadow: '1px 0 0 rgba(0,0,0,0.6)',
+              }}
+            />
+            {/* Rotated caption. Fits even when the spacer collapses to its
+                17px floor, so the two blocks stay labelled at any width. */}
+            <div
+              className="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 whitespace-nowrap text-[8px] font-bold uppercase tracking-[0.2em]"
+              style={{
+                color: RAIL_TEXT,
+                opacity: 0.75,
+                writingMode: 'vertical-rl',
+                transform: 'translate(-50%, -50%) rotate(180deg)',
+                backgroundColor: PANEL_BG,
+                padding: '6px 1px',
+              }}
+            >
+              Returns
+            </div>
+          </div>
 
           {sortedReturns.map((ret, idx) => {
             const peak = peaks[ret.sink_name]

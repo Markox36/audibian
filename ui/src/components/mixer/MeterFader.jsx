@@ -3,15 +3,15 @@ import { CREAM, DB_TICKS, GREEN, RAIL_TEXT, RED } from './theme'
 
 // Volume fader and level meters, side by side.
 //
-// Layout, left to right: the fader runs in its own lane, then the stereo
-// meter bars, then the dB scale. The fader cap used to be a full-width pill
-// floating over the meters, which cut the level bars in half at whatever
-// volume was set; keeping the lanes parallel means neither obscures the other.
+// Layout, left to right: the dB scale, the stereo meter bars, then the fader
+// in its own lane. The fader cap used to be a full-width pill floating over
+// the meters, which cut the level bars in half at whatever volume was set;
+// keeping the lanes parallel means neither obscures the other.
 //
-//   ┌──────┬─────┬────┐
-//   │ ▓▓▓  │ █ █ │ 0  │   fader cap · meters L/R · dB ticks
-//   │  │   │ █ █ │ 12 │
-//   └──────┴─────┴────┘
+//   ┌────┬─────┬──────┐
+//   │ 0  │ █ █ │  ▓▓▓ │   dB ticks · meters L/R · fader cap
+//   │ 12 │ █ █ │   │  │
+//   └────┴─────┴──────┘
 
 const FADER_MIN = 0
 const FADER_MAX = 150
@@ -53,7 +53,7 @@ function MeterFader({ value, onChange, dbL, dbR }) {
   }
 
   const meterFill = (fillPct) => (
-    <div className="relative flex-1 min-w-0 rounded-[1px] border border-white/[0.07] bg-black/70 overflow-hidden">
+    <div className="relative flex-1 min-w-0 max-w-[13px] rounded-[1px] border border-white/[0.07] bg-black/70 overflow-hidden">
       <div
         className="absolute inset-x-0 bottom-0"
         style={{
@@ -72,6 +72,22 @@ function MeterFader({ value, onChange, dbL, dbR }) {
       className="relative flex h-full w-full select-none cursor-ns-resize gap-1 rounded-sm border border-white/[0.09] bg-white/[0.04] px-1 pb-3 pt-1.5"
       style={{ minHeight: 0 }}
     >
+      {/* dB scale */}
+      <div
+        className="flex w-3.5 shrink-0 flex-col justify-between items-start text-[6.5px] font-mono leading-none"
+        style={{ color: RAIL_TEXT }}
+      >
+        {DB_TICKS.map(t => (
+          <span key={t} className="tabular-nums">{t}</span>
+        ))}
+      </div>
+
+      {/* Stereo meters */}
+      <div className="flex flex-1 min-w-0 justify-center gap-[3px]">
+        {meterFill(lPct)}
+        {meterFill(rPct)}
+      </div>
+
       {/* Fader lane */}
       <div className="relative w-[21px] shrink-0">
         {/* Routed slot the cap rides in */}
@@ -110,23 +126,7 @@ function MeterFader({ value, onChange, dbL, dbR }) {
         </div>
       </div>
 
-      {/* Stereo meters */}
-      <div className="flex flex-1 min-w-0 gap-[2px]">
-        {meterFill(lPct)}
-        {meterFill(rPct)}
-      </div>
-
-      {/* dB scale */}
-      <div
-        className="flex w-3.5 shrink-0 flex-col justify-between items-end text-[6.5px] font-mono leading-none"
-        style={{ color: RAIL_TEXT }}
-      >
-        {DB_TICKS.map(t => (
-          <span key={t} className="tabular-nums">{t}</span>
-        ))}
-      </div>
-
-      <div className="absolute bottom-0.5 right-1.5 text-[6.5px] font-mono" style={{ color: RAIL_TEXT }}>
+      <div className="absolute bottom-0.5 left-1.5 text-[6.5px] font-mono" style={{ color: RAIL_TEXT }}>
         db
       </div>
     </div>
