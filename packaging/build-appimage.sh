@@ -16,6 +16,19 @@ set -euo pipefail
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 APPDIR="$REPO_ROOT/packaging/AppDir"
 BINARY="$REPO_ROOT/target/release/audibian"
+OUTPUT="${AUDIBIAN_APPIMAGE_OUTPUT:-$REPO_ROOT/Audibian-x86_64.AppImage}"
+
+# A running AppImage is a live FUSE mount backed by this very file, so
+# overwriting it corrupts the mount and kills the process with SIGBUS —
+# taking the whole audio graph down mid-session. Refuse by default.
+if [[ -e "$OUTPUT" ]] && pgrep -x audibian >/dev/null 2>&1 \
+   && [[ -z "${AUDIBIAN_APPIMAGE_FORCE:-}" ]]; then
+  echo "ERROR: audibian is running and '$OUTPUT' would be overwritten."
+  echo "Close it first, or build elsewhere:"
+  echo "  AUDIBIAN_APPIMAGE_OUTPUT=/tmp/Audibian-new.AppImage make appimage"
+  echo "Set AUDIBIAN_APPIMAGE_FORCE=1 to override."
+  exit 1
+fi
 
 # ── Verify binary ──────────────────────────────────────────────────────────
 if [[ ! -f "$BINARY" ]]; then
@@ -95,7 +108,6 @@ EOF
 chmod +x "$APPDIR/AppRun"
 
 # ── Pack AppImage ──────────────────────────────────────────────────────────
-OUTPUT="$REPO_ROOT/Audibian-x86_64.AppImage"
 echo "Packing AppImage..."
 ARCH=x86_64 APPIMAGE_EXTRACT_AND_RUN=1 "$APPIMAGETOOL" "$APPDIR" "$OUTPUT"
 
