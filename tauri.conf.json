@@ -16,8 +16,8 @@
         "title": "Audibian",
         "width": 1100,
         "height": 700,
-        "minWidth": 800,
-        "minHeight": 600,
+        "minWidth": 880,
+        "minHeight": 620,
         "maximized": true,
         "devtools": true
       }

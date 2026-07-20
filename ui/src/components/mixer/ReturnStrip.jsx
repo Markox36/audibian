@@ -1,0 +1,168 @@
+import React, { useState, useEffect } from 'react'
+import { invoke } from '@tauri-apps/api/core'
+import { Settings, X, GripVertical } from 'lucide-react'
+import { CREAM, FAINT, GREEN, RAIL_TEXT, RED, autoColor, faderToDb } from './theme'
+import { MeterFader } from './MeterFader'
+import { PanKnob } from './PanKnob'
+import { CellLabel, StripFrame } from './StripShell'
+
+
+const ReturnStrip = React.memo(function ReturnStrip({
+  ret,
+  faderVal, setFader,
+  onRemoveReturn, onOpenModal,
+  onDragStart, onDragOver, onDragLeave, onDragEnd, onDrop,
+  isDragging, isDragOverTarget,
+  soloActive, onSoloToggle,
+  dbL, dbR,
+  letter,
+}) {
+  const accent = ret.color || autoColor(ret.id + 180)
+  const faderKey = `ret-${ret.id}`
+  const [muted, setMuted] = useState(ret.muted)
+  useEffect(() => { setMuted(ret.muted) }, [ret.muted])
+
+  const dragClasses = isDragging ? 'opacity-30' : isDragOverTarget ? 'ring-1 ring-white/40' : ''
+  const peakDbDisplay = Math.max(dbL ?? -60, dbR ?? -60)
+  const peakTxt = peakDbDisplay <= -59.5 ? '-inf' : peakDbDisplay.toFixed(1)
+  const faderTxt = faderToDb(faderVal)
+  const clipping = peakDbDisplay > -0.5
+
+  return (
+    <StripFrame
+      accent={accent}
+      dragClasses={dragClasses}
+      editing={isDragOverTarget}
+      onDragOver={e => onDragOver(e, ret.id, false)}
+      onDragLeave={e => onDragLeave(e, ret.id)}
+      onDrop={e => onDrop(e, ret.id, false)}
+    >
+      {/* Row 1 — name */}
+      <div className="flex items-center gap-1 px-1 h-full w-full bg-black/40 border border-white/[0.04] rounded-sm">
+        <div
+          draggable
+          onDragStart={e => onDragStart(e, ret.id, false)}
+          onDragEnd={onDragEnd}
+          className="cursor-grab shrink-0 hover:text-white transition-colors"
+          style={{ color: RAIL_TEXT }}
+        >
+          <GripVertical className="w-3 h-3" />
+        </div>
+        <input
+          defaultValue={ret.name}
+          key={ret.name}
+          onBlur={e => invoke('update_return_channel_name', { id: ret.id, name: e.target.value }).catch(console.error)}
+          onMouseDown={e => e.stopPropagation()}
+          className="bg-transparent text-[10px] font-semibold text-center flex-1 min-w-0 focus:outline-none focus:bg-white/[0.05] rounded-sm py-0.5 truncate"
+          style={{ color: CREAM }}
+        />
+        <button
+          onClick={() => onOpenModal({ id: ret.id, isInput: false, name: ret.name, color: accent })}
+          className="shrink-0 hover:text-white transition-colors"
+          style={{ color: RAIL_TEXT }}
+        >
+          <Settings className="w-3 h-3" />
+        </button>
+      </div>
+
+      {/* Row 2 — Sends placeholder (letter) */}
+      <div
+        className="flex items-center justify-center h-full w-full text-[10px] font-black tracking-widest bg-black/25 border border-white/[0.04] rounded-sm"
+        style={{ color: accent }}
+      >
+        {letter}
+      </div>
+
+      {/* Row 3 — Output (BUS label) */}
+      <div className="h-full w-full">
+        <CellLabel>BUS</CellLabel>
+      </div>
+
+      {/* Row 4 — Pan */}
+      <div className="w-full h-full flex items-center justify-center bg-black/25 border border-white/[0.04] rounded-sm py-1">
+        <PanKnob
+          value={ret.pan ?? 0}
+          onChange={(p) => invoke('set_strip_pan', { id: ret.id, isInput: false, pan: p }).catch(console.error)}
+        />
+      </div>
+
+      {/* Row 5 — Volume */}
+      <div className="grid grid-cols-2 gap-1 w-full h-full">
+        <div
+          onDoubleClick={() => {
+            setFader(faderKey, 100)
+            invoke('set_strip_volume', { id: ret.id, isInput: false, volume: 1.0 }).catch(console.error)
+          }}
+          className="text-[8.5px] font-mono text-center flex items-center justify-center rounded-sm cursor-pointer tabular-nums bg-black/25 border border-white/[0.04] hover:bg-white/[0.03] transition-colors"
+          style={{ color: CREAM }}
+        >
+          {faderTxt}
+        </div>
+        <div
+          className="text-[8.5px] font-mono text-center flex items-center justify-center rounded-sm tabular-nums border border-white/[0.04]"
+          style={{
+            backgroundColor: clipping ? RED : 'rgba(0,0,0,0.25)',
+            color: clipping ? 'white' : GREEN,
+          }}
+        >
+          {peakTxt}
+        </div>
+      </div>
+
+      {/* Row 6 — Meter */}
+      <div className="h-full w-full min-h-0 relative">
+        <MeterFader
+          value={faderVal}
+          onChange={v => {
+            setFader(faderKey, v)
+            invoke('set_strip_volume', { id: ret.id, isInput: false, volume: v / 100 }).catch(console.error)
+          }}
+          dbL={dbL}
+          dbR={dbR}
+        />
+      </div>
+
+      {/* Row 7 — Exclude */}
+      <div className="flex items-center justify-center gap-1 w-full h-full">
+        <button
+          onClick={() => {
+            const next = !muted
+            setMuted(next)
+            invoke('set_strip_mute', { id: ret.id, isInput: false, muted: next }).catch(console.error)
+          }}
+          className="w-6 h-6 rounded-sm text-[10px] font-bold transition-all flex items-center justify-center"
+          style={{
+            backgroundColor: muted ? RED : 'transparent',
+            color: muted ? 'white' : CREAM,
+            border: `1px solid ${muted ? RED : FAINT}`,
+          }}
+        >
+          M
+        </button>
+        <button
+          onClick={() => onSoloToggle(ret.id, false)}
+          className="w-6 h-6 rounded-sm text-[10px] font-bold transition-all flex items-center justify-center"
+          style={{
+            backgroundColor: soloActive ? '#f5b94a' : 'transparent',
+            color: soloActive ? 'black' : CREAM,
+            border: `1px solid ${soloActive ? '#f5b94a' : FAINT}`,
+          }}
+        >
+          S
+        </button>
+        <button
+          onClick={() => onRemoveReturn(ret.id)}
+          className="w-5 h-6 rounded-sm hover:text-rose-400 flex items-center justify-center transition-colors"
+          style={{ color: RAIL_TEXT, border: `1px solid ${FAINT}` }}
+        >
+          <X className="w-3 h-3 mx-auto" />
+        </button>
+      </div>
+    </StripFrame>
+  )
+})
+
+// ---------------------------------------------------------------------------
+// Master strip
+
+export { ReturnStrip }
