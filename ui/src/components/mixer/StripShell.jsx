@@ -24,10 +24,10 @@ function StripFrame({ accent, children, dragClasses, style, onDragOver, onDragLe
         padding: '4px 4px 6px 4px',
         backgroundColor: STRIP_BG,
         borderRadius: 4,
-        border: '1px solid rgba(255, 255, 255, 0.03)',
+        border: '1px solid rgba(255, 255, 255, 0.12)',
         borderTop: `2px solid ${editing ? accent : 'transparent'}`,
         color: CREAM,
-        boxShadow: '0 2px 8px rgba(0, 0, 0, 0.2)',
+        boxShadow: '0 2px 10px rgba(0, 0, 0, 0.45)',
         ...style,
       }}
     >
@@ -39,7 +39,7 @@ function StripFrame({ accent, children, dragClasses, style, onDragOver, onDragLe
 function CellLabel({ children, color = CREAM, ...rest }) {
   return (
     <div
-      className="text-[9px] font-bold tracking-wider uppercase text-center truncate px-1 leading-none flex items-center justify-center w-full h-full bg-black/25 border border-white/[0.04] rounded-sm"
+      className="text-[9px] font-bold tracking-wider uppercase text-center truncate px-1 leading-none flex items-center justify-center w-full h-full bg-white/[0.05] border border-white/[0.11] rounded-sm"
       style={{ color }}
       {...rest}
     >

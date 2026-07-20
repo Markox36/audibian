@@ -38,7 +38,7 @@ const ReturnStrip = React.memo(function ReturnStrip({
       onDrop={e => onDrop(e, ret.id, false)}
     >
       {/* Row 1 — name */}
-      <div className="flex items-center gap-1 px-1 h-full w-full bg-black/40 border border-white/[0.04] rounded-sm">
+      <div className="flex items-center gap-1 px-1 h-full w-full bg-white/[0.09] border border-white/[0.11] rounded-sm">
         <div
           draggable
           onDragStart={e => onDragStart(e, ret.id, false)}
@@ -67,7 +67,7 @@ const ReturnStrip = React.memo(function ReturnStrip({
 
       {/* Row 2 — Sends placeholder (letter) */}
       <div
-        className="flex items-center justify-center h-full w-full text-[10px] font-black tracking-widest bg-black/25 border border-white/[0.04] rounded-sm"
+        className="flex items-center justify-center h-full w-full text-[10px] font-black tracking-widest bg-white/[0.05] border border-white/[0.11] rounded-sm"
         style={{ color: accent }}
       >
         {letter}
@@ -79,7 +79,7 @@ const ReturnStrip = React.memo(function ReturnStrip({
       </div>
 
       {/* Row 4 — Pan */}
-      <div className="w-full h-full flex items-center justify-center bg-black/25 border border-white/[0.04] rounded-sm py-1">
+      <div className="w-full h-full flex items-center justify-center bg-white/[0.05] border border-white/[0.11] rounded-sm py-1">
         <PanKnob
           value={ret.pan ?? 0}
           onChange={(p) => invoke('set_strip_pan', { id: ret.id, isInput: false, pan: p }).catch(console.error)}
@@ -93,13 +93,13 @@ const ReturnStrip = React.memo(function ReturnStrip({
             setFader(faderKey, 100)
             invoke('set_strip_volume', { id: ret.id, isInput: false, volume: 1.0 }).catch(console.error)
           }}
-          className="text-[8.5px] font-mono text-center flex items-center justify-center rounded-sm cursor-pointer tabular-nums bg-black/25 border border-white/[0.04] hover:bg-white/[0.03] transition-colors"
+          className="text-[8.5px] font-mono text-center flex items-center justify-center rounded-sm cursor-pointer tabular-nums bg-white/[0.05] border border-white/[0.11] hover:bg-white/[0.10] transition-colors"
           style={{ color: CREAM }}
         >
           {faderTxt}
         </div>
         <div
-          className="text-[8.5px] font-mono text-center flex items-center justify-center rounded-sm tabular-nums border border-white/[0.04]"
+          className="text-[8.5px] font-mono text-center flex items-center justify-center rounded-sm tabular-nums border border-white/[0.11]"
           style={{
             backgroundColor: clipping ? RED : 'rgba(0,0,0,0.25)',
             color: clipping ? 'white' : GREEN,

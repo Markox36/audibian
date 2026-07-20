@@ -22,19 +22,19 @@ const MasterStrip = React.memo(function MasterStrip({
   return (
     <StripFrame accent={accent} editing dragClasses="">
       {/* Row 1 — Title */}
-      <div className="flex items-center justify-center h-full w-full bg-black/40 border border-white/[0.04] rounded-sm">
+      <div className="flex items-center justify-center h-full w-full bg-white/[0.09] border border-white/[0.11] rounded-sm">
         <span className="text-[10px] font-black tracking-[0.15em] uppercase" style={{ color: accent }}>
           Master
         </span>
       </div>
 
       {/* Row 2 — Stereo Label */}
-      <div className="flex items-center justify-center h-full w-full bg-black/25 border border-white/[0.04] rounded-sm" style={{ color: RAIL_TEXT }}>
+      <div className="flex items-center justify-center h-full w-full bg-white/[0.05] border border-white/[0.11] rounded-sm" style={{ color: RAIL_TEXT }}>
         <span className="text-[8px] uppercase tracking-wider font-semibold">stereo</span>
       </div>
 
       {/* Row 3 — HW Sink Select */}
-      <div className="h-full w-full bg-black/25 border border-white/[0.04] rounded-sm overflow-hidden flex items-center">
+      <div className="h-full w-full bg-white/[0.05] border border-white/[0.11] rounded-sm overflow-hidden flex items-center">
         <select
           value={masterSink || ''}
           onChange={e => invoke('set_master_sink', { sinkName: e.target.value || null }).catch(console.error)}
@@ -52,7 +52,7 @@ const MasterStrip = React.memo(function MasterStrip({
       </div>
 
       {/* Row 4 — Pan */}
-      <div className="w-full h-full flex items-center justify-center bg-black/25 border border-white/[0.04] rounded-sm py-1">
+      <div className="w-full h-full flex items-center justify-center bg-white/[0.05] border border-white/[0.11] rounded-sm py-1">
         <PanKnob
           value={masterPan ?? 0}
           onChange={(p) => invoke('set_master_pan', { pan: p }).catch(console.error)}
@@ -66,13 +66,13 @@ const MasterStrip = React.memo(function MasterStrip({
             setFader('master', 100)
             invoke('set_master_volume', { volume: 1.0 }).catch(console.error)
           }}
-          className="text-[8.5px] font-mono text-center flex items-center justify-center rounded-sm cursor-pointer tabular-nums bg-black/25 border border-white/[0.04] hover:bg-white/[0.03] transition-colors"
+          className="text-[8.5px] font-mono text-center flex items-center justify-center rounded-sm cursor-pointer tabular-nums bg-white/[0.05] border border-white/[0.11] hover:bg-white/[0.10] transition-colors"
           style={{ color: CREAM }}
         >
           {faderTxt}
         </div>
         <div
-          className="text-[8.5px] font-mono text-center flex items-center justify-center rounded-sm tabular-nums border border-white/[0.04]"
+          className="text-[8.5px] font-mono text-center flex items-center justify-center rounded-sm tabular-nums border border-white/[0.11]"
           style={{
             backgroundColor: clipping ? RED : 'rgba(0,0,0,0.25)',
             color: clipping ? 'white' : GREEN,

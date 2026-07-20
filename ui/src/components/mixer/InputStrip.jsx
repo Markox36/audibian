@@ -47,7 +47,7 @@ const InputStrip = React.memo(function InputStrip({
       onDrop={e => onDrop(e, ch.id, true)}
     >
       {/* Row 1 — Input Header */}
-      <div className="flex items-center gap-1 px-1 h-full w-full bg-black/40 border border-white/[0.04] rounded-sm">
+      <div className="flex items-center gap-1 px-1 h-full w-full bg-white/[0.09] border border-white/[0.11] rounded-sm">
         <div
           draggable
           onDragStart={e => onDragStart(e, ch.id, true)}
@@ -78,7 +78,7 @@ const InputStrip = React.memo(function InputStrip({
 
       {/* Row 2 — Sends */}
       <div
-        className="flex flex-col items-center justify-center gap-1 px-1 py-1 h-full w-full bg-black/25 border border-white/[0.04] rounded-sm"
+        className="flex flex-col items-center justify-center gap-1 px-1 py-1 h-full w-full bg-white/[0.05] border border-white/[0.11] rounded-sm"
       >
         {returnChannels.length === 0 ? (
           <button
@@ -113,7 +113,7 @@ const InputStrip = React.memo(function InputStrip({
       </div>
 
       {/* Row 3 — Output/Source Select */}
-      <div className="h-full w-full bg-black/25 border border-white/[0.04] rounded-sm overflow-hidden flex items-center">
+      <div className="h-full w-full bg-white/[0.05] border border-white/[0.11] rounded-sm overflow-hidden flex items-center">
         <select
           value={ch.source_name || ''}
           onChange={e => invoke('set_input_source', { id: ch.id, sourceName: e.target.value || null }).catch(console.error)}
@@ -132,7 +132,7 @@ const InputStrip = React.memo(function InputStrip({
       </div>
 
       {/* Row 4 — Pan */}
-      <div className="w-full h-full flex items-center justify-center bg-black/25 border border-white/[0.04] rounded-sm py-1">
+      <div className="w-full h-full flex items-center justify-center bg-white/[0.05] border border-white/[0.11] rounded-sm py-1">
         <PanKnob
           value={ch.pan ?? 0}
           onChange={(p) => invoke('set_strip_pan', { id: ch.id, isInput: true, pan: p }).catch(console.error)}
@@ -146,14 +146,14 @@ const InputStrip = React.memo(function InputStrip({
             setFader(faderKey, 100)
             invoke('set_strip_volume', { id: ch.id, isInput: true, volume: 1.0 }).catch(console.error)
           }}
-          className="text-[8.5px] font-mono text-center flex items-center justify-center rounded-sm cursor-pointer tabular-nums bg-black/25 border border-white/[0.04] hover:bg-white/[0.03] transition-colors"
+          className="text-[8.5px] font-mono text-center flex items-center justify-center rounded-sm cursor-pointer tabular-nums bg-white/[0.05] border border-white/[0.11] hover:bg-white/[0.10] transition-colors"
           style={{ color: CREAM }}
           title="Volume — double-click to reset"
         >
           {faderTxt}
         </div>
         <div
-          className="text-[8.5px] font-mono text-center flex items-center justify-center rounded-sm tabular-nums border border-white/[0.04]"
+          className="text-[8.5px] font-mono text-center flex items-center justify-center rounded-sm tabular-nums border border-white/[0.11]"
           style={{
             backgroundColor: clipping ? RED : 'rgba(0,0,0,0.25)',
             color: clipping ? 'white' : GREEN,

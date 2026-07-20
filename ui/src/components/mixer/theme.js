@@ -4,14 +4,19 @@
 // constants exist for the cases Tailwind cannot express: values interpolated
 // into inline styles (meter fills, per-strip accents, canvas strokes).
 
-export const CREAM     = '#e8e6dd'
-export const GREEN     = '#3ecf8e'
-export const GREEN_DIM = 'rgba(62, 207, 142, 0.35)'
-export const RED       = '#ff5e62'
-export const PANEL_BG  = '#0a0a0a'
-export const STRIP_BG  = 'rgba(255, 255, 255, 0.02)'
-export const RAIL_TEXT = 'rgba(255, 255, 255, 0.4)'
-export const FAINT     = 'rgba(255, 255, 255, 0.06)'
+// Contrast note: the previous values sat between #0a0a0a and 2-6% white
+// overlays, so strips, cells and panel background were within a few percent
+// luminance of each other and the controls read as one dark mass. Panel and
+// strip are now separated by a visible step, and borders sit at an opacity
+// that actually draws an edge.
+export const CREAM     = '#eceade'
+export const GREEN     = '#45d99a'
+export const GREEN_DIM = 'rgba(69, 217, 154, 0.35)'
+export const RED       = '#ff6b6e'
+export const PANEL_BG  = '#101013'
+export const STRIP_BG  = 'rgba(255, 255, 255, 0.055)'
+export const RAIL_TEXT = 'rgba(255, 255, 255, 0.58)'
+export const FAINT     = 'rgba(255, 255, 255, 0.14)'
 
 // Subgrid rows: Input | Sends | Output | Pan | Volume | Meter | Exclude
 //
@@ -68,7 +73,7 @@ export function faderToDb(val) {
   return `${db.toFixed(1)}`
 }
 
-const DESIGNER_COLORS = [
+export const DESIGNER_COLORS = [
   '#3ecf8e', '#4169e1', '#b26645', '#7a638a',
   '#8f4b5d', '#a18c47', '#377f8d', '#8e6047',
 ]

@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react'
 import { Settings, X } from 'lucide-react'
-import { CREAM, GREEN, RAIL_TEXT } from './theme'
+import { CREAM, DESIGNER_COLORS, GREEN, RAIL_TEXT } from './theme'
 
 
 function ConfigModal({ modal, onSave, onCancel }) {
