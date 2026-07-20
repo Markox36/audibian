@@ -6,6 +6,7 @@ mod mixer;
 mod matrix_config;
 mod meter;
 mod persistent;
+mod proc;
 mod soundboard;
 #[cfg(target_os = "linux")]
 mod x11_embed;
@@ -16,6 +17,7 @@ use audio::{AudioGraph, PwEvent, PwThread};
 use profiles::{AppConfig, ProfileStore};
 use mixer::MixerConfig;
 use matrix_config::MatrixConfig;
+use proc::CommandExt;
 use state::AppState;
 use tauri::{Emitter, Manager, WindowEvent};
 use tauri::menu::{Menu, MenuItem};
@@ -500,9 +502,9 @@ fn handle_pw_event(event: PwEvent, graph: &Arc<Mutex<AudioGraph>>, app: &tauri::
                 let master_hw = state.mixer_config.lock().unwrap().master_sink.clone();
                 if master_hw.as_deref() == Some(name.as_str()) {
                     if let Some(mid) = state.master_loopback_module.lock().unwrap().take() {
-                        let _ = std::process::Command::new("pactl")
+                        std::process::Command::new("pactl")
                             .args(["unload-module", &mid.to_string()])
-                            .spawn();
+                            .spawn_detached();
                     }
                 }
             }

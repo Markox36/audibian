@@ -21,6 +21,7 @@ use super::graph::{
     AudioLink, AudioNode, AudioPort, Direction, MediaType,
     node_type_from_media_class, NodeType,
 };
+use crate::proc::CommandExt;
 
 // ---------------------------------------------------------------------------
 // Message types
@@ -71,17 +72,17 @@ impl PwThread {
     /// Create a link between two ports using `pw-link`.
     pub fn create_link(&self, output_port_id: u32, input_port_id: u32) {
         debug!("pw-link {output_port_id} {input_port_id}");
-        let _ = std::process::Command::new("pw-link")
+        std::process::Command::new("pw-link")
             .args([output_port_id.to_string(), input_port_id.to_string()])
-            .spawn();
+            .spawn_detached();
     }
 
     /// Destroy a link by its ID using `pw-link -d`.
     pub fn destroy_link(&self, link_id: u32) {
         debug!("pw-link -d {link_id}");
-        let _ = std::process::Command::new("pw-link")
+        std::process::Command::new("pw-link")
             .args(["-d".to_string(), link_id.to_string()])
-            .spawn();
+            .spawn_detached();
     }
 
     /// Execute a command (CreateLink/DestroyLink handled locally, Quit is a no-op).

@@ -5,6 +5,7 @@ use crate::audio::eq::EqBand;
 use crate::audio::effects;
 use crate::audio::{AudioGraph, PwCommand, PwThread};
 use crate::mixer::{InputChannel, MidiChannel, MidiPlugin, ReturnChannel};
+use crate::proc::CommandExt;
 use crate::profiles::model::AudioProfile;
 use crate::profiles::AppConfig;
 use crate::soundboard::{Sound, SoundboardConfig, SOUNDBOARD_SINK_NAME};
@@ -321,9 +322,9 @@ pub fn remove_input_channel(state: State<AppState>, id: u32) {
 
     // Unload source loopback if any
     if let Some(mid) = state.input_source_ids.lock().unwrap().remove(&id) {
-        let _ = std::process::Command::new("pactl")
+        std::process::Command::new("pactl")
             .args(["unload-module", &mid.to_string()])
-            .spawn();
+            .spawn_detached();
     }
 
     // Unload all send loopbacks where this channel is the input
@@ -332,9 +333,9 @@ pub fn remove_input_channel(state: State<AppState>, id: u32) {
         let keys: Vec<(u32, u32)> = send_mods.keys().filter(|(inp, _)| *inp == id).cloned().collect();
         for key in keys {
             if let Some(mid) = send_mods.remove(&key) {
-                let _ = std::process::Command::new("pactl")
+                std::process::Command::new("pactl")
                     .args(["unload-module", &mid.to_string()])
-                    .spawn();
+                    .spawn_detached();
             }
         }
     }
@@ -410,9 +411,9 @@ pub fn update_return_channel_name(state: State<AppState>, id: u32, name: String)
         if let Some(mods) = ids.get_mut(&id) {
             if mods.len() > 1 {
                 // Unload old remap-source
-                let _ = std::process::Command::new("pactl")
+                std::process::Command::new("pactl")
                     .args(["unload-module", &mods[1].to_string()])
-                    .spawn();
+                    .spawn_detached();
             }
             // Create new remap-source with updated description
             if let Some(mid) = create_remap_source(&monitor, &src_name, &name) {
@@ -457,9 +458,9 @@ pub fn toggle_send(state: State<AppState>, input_id: u32, return_id: u32, active
             }
         } else {
             if let Some(mid) = state.send_module_ids.lock().unwrap().remove(&(input_id, return_id)) {
-                let _ = std::process::Command::new("pactl")
+                std::process::Command::new("pactl")
                     .args(["unload-module", &mid.to_string()])
-                    .spawn();
+                    .spawn_detached();
                 debug!("Removed loopback input {} → return {}", input_id, return_id);
             }
         }
@@ -674,9 +675,9 @@ pub fn set_input_source(state: State<AppState>, id: u32, source_name: Option<Str
 
     // Unload existing source loopback
     if let Some(mid) = state.input_source_ids.lock().unwrap().remove(&id) {
-        let _ = std::process::Command::new("pactl")
+        std::process::Command::new("pactl")
             .args(["unload-module", &mid.to_string()])
-            .spawn();
+            .spawn_detached();
     }
 
     // Create new source loopback if source and sink exist
@@ -704,9 +705,9 @@ pub fn set_input_mono(state: State<AppState>, id: u32, mono: bool) {
 
     // Reload source loopback with new mono setting
     if let Some(mid) = state.input_source_ids.lock().unwrap().remove(&id) {
-        let _ = std::process::Command::new("pactl")
+        std::process::Command::new("pactl")
             .args(["unload-module", &mid.to_string()])
-            .spawn();
+            .spawn_detached();
     }
     if let (Some(src), Some(sink)) = (source_name, sink_name) {
         if let Some(mid) = create_source_loopback(&src, &sink, mono) {
@@ -842,9 +843,9 @@ fn regenerate_input_routing(state: &AppState, ch_id: u32) {
             .filter(|(inp, _)| *inp == ch_id).cloned().collect();
         for key in keys {
             if let Some(mid) = send_mods.remove(&key) {
-                let _ = std::process::Command::new("pactl")
+                std::process::Command::new("pactl")
                     .args(["unload-module", &mid.to_string()])
-                    .spawn();
+                    .spawn_detached();
             }
         }
     }
@@ -940,9 +941,9 @@ pub fn set_strip_eq(
                 .filter(|(inp, _)| *inp == id).cloned().collect();
             for key in keys {
                 if let Some(mid) = send_mods.remove(&key) {
-                    let _ = std::process::Command::new("pactl")
+                    std::process::Command::new("pactl")
                         .args(["unload-module", &mid.to_string()])
-                        .spawn();
+                        .spawn_detached();
                 }
             }
         }
@@ -1040,9 +1041,9 @@ pub(crate) fn disconnect_nodes(graph: &AudioGraph, src_name: &str, dst_name: &st
 
 /// Move a Stream/Output (app playback stream) to a specific sink by name.
 pub fn move_stream_to_sink(stream_id: u32, sink_name: &str) {
-    let _ = std::process::Command::new("pactl")
+    std::process::Command::new("pactl")
         .args(["move-sink-input", &stream_id.to_string(), sink_name])
-        .spawn();
+        .spawn_detached();
 }
 
 /// Decide which strip's sink should host a new stream based on the strip's
@@ -1236,9 +1237,9 @@ pub fn cleanup_stale_modules() {
         if is_stale {
             if let Some(id_str) = line.split('\t').next() {
                 if let Ok(id) = id_str.trim().parse::<u32>() {
-                    let _ = std::process::Command::new("pactl")
+                    std::process::Command::new("pactl")
                         .args(["unload-module", &id.to_string()])
-                        .spawn();
+                        .spawn_detached();
                 }
             }
         }
@@ -1279,9 +1280,9 @@ fn destroy_orphan_audibian_nodes() {
     }
 
     for id in to_destroy {
-        let _ = std::process::Command::new("pw-cli")
+        std::process::Command::new("pw-cli")
             .args(["destroy", &id.to_string()])
-            .spawn();
+            .spawn_detached();
     }
 }
 
@@ -1356,9 +1357,9 @@ fn loopback_sink_input(module_id: u32) -> Option<u32> {
 pub fn set_loopback_volume(module_id: u32, volume: f32) {
     let Some(si) = loopback_sink_input(module_id) else { return };
     let pct = format!("{:.0}%", (volume.clamp(0.0, 4.0) * 100.0).round());
-    let _ = std::process::Command::new("pactl")
+    std::process::Command::new("pactl")
         .args(["set-sink-input-volume", &si.to_string(), &pct])
-        .spawn();
+        .spawn_detached();
 }
 
 pub fn create_source_loopback(source: &str, sink: &str, mono: bool) -> Option<u32> {
@@ -1398,9 +1399,9 @@ pub fn write_pipewire_conf(_input_channels: &[crate::mixer::InputChannel]) {
 }
 
 fn unload_module(module_id: u32) {
-    let _ = std::process::Command::new("pactl")
+    std::process::Command::new("pactl")
         .args(["unload-module", &module_id.to_string()])
-        .spawn();
+        .spawn_detached();
 }
 
 /// Push fader+pan+mute to a stereo sink via pactl per-channel volume.
@@ -1412,13 +1413,13 @@ pub fn apply_strip_pactl(sink: &str, fader: f32, pan: f32, muted: bool) {
     let r = f * (1.0 + p.min(0.0));
     let l_pct = format!("{:.0}%", (l * 100.0).round());
     let r_pct = format!("{:.0}%", (r * 100.0).round());
-    let _ = std::process::Command::new("pactl")
+    std::process::Command::new("pactl")
         .args(["set-sink-volume", sink, &l_pct, &r_pct])
-        .spawn();
+        .spawn_detached();
     let m = if muted { "1" } else { "0" };
-    let _ = std::process::Command::new("pactl")
+    std::process::Command::new("pactl")
         .args(["set-sink-mute", sink, m])
-        .spawn();
+        .spawn_detached();
     // Mute every sink-input currently feeding this sink (e.g. Spotify, browser).
     // Sink-mute alone is reliable on hardware sinks but on pipewire-pulse
     // null-sinks the propagation to active streams can lag until another
@@ -1443,9 +1444,9 @@ fn apply_sink_input_mute(sink: &str, muted: bool) {
         let Ok(si_id) = cols[0].parse::<u32>() else { continue };
         let Ok(si_sink) = cols[1].parse::<u32>() else { continue };
         if si_sink != sink_id { continue; }
-        let _ = std::process::Command::new("pactl")
+        std::process::Command::new("pactl")
             .args(["set-sink-input-mute", &si_id.to_string(), m])
-            .spawn();
+            .spawn_detached();
     }
 }
 
@@ -1492,22 +1493,22 @@ fn reapply_solo_mutes(state: &AppState) {
 
 fn set_volume_pactl(node_name: &str, volume: f64) {
     let pct = format!("{:.0}%", (volume * 100.0).round());
-    let _ = std::process::Command::new("pactl")
+    std::process::Command::new("pactl")
         .args(["set-sink-volume", node_name, &pct])
-        .spawn();
-    let _ = std::process::Command::new("pactl")
+        .spawn_detached();
+    std::process::Command::new("pactl")
         .args(["set-source-volume", node_name, &pct])
-        .spawn();
+        .spawn_detached();
 }
 
 fn set_mute_pactl(node_name: &str, muted: bool) {
     let state = if muted { "1" } else { "0" };
-    let _ = std::process::Command::new("pactl")
+    std::process::Command::new("pactl")
         .args(["set-sink-mute", node_name, state])
-        .spawn();
-    let _ = std::process::Command::new("pactl")
+        .spawn_detached();
+    std::process::Command::new("pactl")
         .args(["set-source-mute", node_name, state])
-        .spawn();
+        .spawn_detached();
 }
 
 // ---------------------------------------------------------------------------
