@@ -50,7 +50,7 @@ jobs:
         # tauri-build resolves `frontendDist: ui/dist` at compile time, so the
         # bundle has to exist before cargo runs — even for `cargo test`.
         run: |
-          npm install -g pnpm
+          npm install -g pnpm@9
           cd ui && pnpm install --frozen-lockfile && pnpm run build
 
       - name: Clippy
@@ -90,7 +90,7 @@ jobs:
 
       - name: Build frontend
         run: |
-          npm install -g pnpm
+          npm install -g pnpm@9
           cd ui && pnpm install --frozen-lockfile && pnpm run build
 
       - name: Build AppImage
