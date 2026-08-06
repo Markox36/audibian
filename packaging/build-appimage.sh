@@ -81,7 +81,7 @@ cp "$REPO_ROOT/data/audibian.desktop" "$APPDIR/"
 cp "$REPO_ROOT/data/icons/scalable/apps/audibian.svg" "$APPDIR/audibian.svg"
 
 # ── linuxdeploy + GTK plugin ───────────────────────────────────────────────
-export DEPLOY_GTK_VERSION=4
+export DEPLOY_GTK_VERSION=3
 export PATH="$BIN_DIR:$PATH"
 export NO_STRIP=true    # Rust binaries are already stripped in release mode
 # Run AppImage tools without FUSE (works in containers and systems without libfuse2)
