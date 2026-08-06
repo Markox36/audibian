@@ -128,12 +128,12 @@ export default function Soundboard() {
   }
 
   return (
-    <div className="flex-1 flex flex-col h-full bg-[#171717] text-neutral-300 font-sans overflow-hidden">
+    <div className="flex-1 flex flex-col h-full bg-[#101013] text-neutral-300 font-sans overflow-hidden">
 
       {/* Toolbar */}
       <div className="flex items-center justify-between px-4 py-1.5 bg-white/[0.04] border-b border-white/[0.08] gap-3 h-[42px] shrink-0 text-xs text-neutral-300 select-none">
         <div className="flex items-center gap-3">
-          <Music className="w-3.5 h-3.5 text-[#4169e1]" />
+          <Music className="w-3.5 h-3.5 text-[#45d99a]" />
           <span className="text-[10px] font-black tracking-[0.22em] text-neutral-100 uppercase">
             Soundboard
           </span>
@@ -146,15 +146,15 @@ export default function Soundboard() {
           <button
             onClick={handleAdd}
             disabled={adding}
-            className="bg-white/[0.05] border border-white/[0.08] hover:bg-[#4169e1]/15 hover:border-[#4169e1]/60 hover:text-white text-neutral-200 text-[9px] font-bold uppercase tracking-wider py-1 px-2.5 rounded-md transition-colors flex items-center gap-1.5 disabled:opacity-50"
+            className="bg-white/[0.05] border border-white/[0.08] hover:bg-[#45d99a]/15 hover:border-[#45d99a]/60 hover:text-white text-neutral-200 text-[9px] font-bold uppercase tracking-wider py-1 px-2.5 rounded-md transition-colors flex items-center gap-1.5 disabled:opacity-50"
           >
-            <Plus className="w-3 h-3 text-[#4169e1]" />
+            <Plus className="w-3 h-3 text-[#45d99a]" />
             {adding ? 'Picking…' : 'Add Sounds'}
           </button>
           <button
             onClick={handleStopAll}
             disabled={sounds.length === 0}
-            className="bg-white/[0.05] border border-white/[0.08] hover:bg-[#df4c55]/15 hover:border-[#df4c55]/60 hover:text-[#df4c55] text-neutral-200 text-[9px] font-bold uppercase tracking-wider py-1 px-2.5 rounded-md transition-colors flex items-center gap-1.5 disabled:opacity-40 disabled:cursor-not-allowed"
+            className="bg-white/[0.05] border border-white/[0.08] hover:bg-[#ff6b6e]/15 hover:border-[#ff6b6e]/60 hover:text-[#ff6b6e] text-neutral-200 text-[9px] font-bold uppercase tracking-wider py-1 px-2.5 rounded-md transition-colors flex items-center gap-1.5 disabled:opacity-40 disabled:cursor-not-allowed"
           >
             <Square className="w-3 h-3" />
             Stop all
@@ -180,7 +180,7 @@ export default function Soundboard() {
               return (
                 <div
                   key={s.id}
-                  className="bg-[#1f1f1f] border border-white/[0.06] rounded-md p-2.5 flex flex-col gap-2 hover:border-[#4169e1]/40 transition-colors group"
+                  className="bg-[#1f1f1f] border border-white/[0.06] rounded-md p-2.5 flex flex-col gap-2 hover:border-[#45d99a]/40 transition-colors group"
                 >
                   <div className="flex items-center justify-between gap-1">
                     {renaming?.id === s.id ? (
@@ -193,7 +193,7 @@ export default function Soundboard() {
                           if (e.key === 'Enter') commitRename()
                           if (e.key === 'Escape') setRenaming(null)
                         }}
-                        className="flex-1 min-w-0 bg-black/40 border border-white/[0.08] text-[11px] text-neutral-100 font-semibold px-1.5 py-0.5 rounded-sm focus:outline-none focus:border-[#4169e1]"
+                        className="flex-1 min-w-0 bg-black/40 border border-white/[0.08] text-[11px] text-neutral-100 font-semibold px-1.5 py-0.5 rounded-sm focus:outline-none focus:border-[#45d99a]"
                       />
                     ) : (
                       <div
@@ -217,7 +217,7 @@ export default function Soundboard() {
                     </button>
                     <button
                       onClick={() => handleRemove(s.id)}
-                      className="text-neutral-500 hover:text-[#df4c55] opacity-0 group-hover:opacity-100 transition-opacity shrink-0 p-0.5"
+                      className="text-neutral-500 hover:text-[#ff6b6e] opacity-0 group-hover:opacity-100 transition-opacity shrink-0 p-0.5"
                       title="Remove"
                     >
                       <Trash2 className="w-3.5 h-3.5" />
@@ -238,7 +238,7 @@ export default function Soundboard() {
                   <button
                     onClick={() => handlePlay(s.id)}
                     disabled={s.duration_ms == null}
-                    className="w-full bg-[#4169e1]/15 border border-[#4169e1]/40 hover:bg-[#4169e1]/30 hover:border-[#4169e1] text-[#4169e1] text-[10px] font-bold uppercase tracking-wider py-2 rounded-sm transition-colors flex items-center justify-center gap-1.5 disabled:opacity-40 disabled:cursor-not-allowed"
+                    className="w-full bg-[#45d99a]/15 border border-[#45d99a]/40 hover:bg-[#45d99a]/30 hover:border-[#45d99a] text-[#45d99a] text-[10px] font-bold uppercase tracking-wider py-2 rounded-sm transition-colors flex items-center justify-center gap-1.5 disabled:opacity-40 disabled:cursor-not-allowed"
                   >
                     <Play className="w-3 h-3" />
                     Play
@@ -262,7 +262,7 @@ export default function Soundboard() {
           >
             <div className="flex items-center justify-between border-b border-white/[0.08] pb-2">
               <div className="flex items-center gap-2">
-                <Scissors className="w-4 h-4 text-[#4169e1]" />
+                <Scissors className="w-4 h-4 text-[#45d99a]" />
                 <span className="text-[11px] font-extrabold uppercase tracking-widest text-neutral-100">Trim sound</span>
               </div>
               <span className="text-[9px] font-mono text-neutral-500">
@@ -280,7 +280,7 @@ export default function Soundboard() {
                   value={trimming.start}
                   onChange={e => setTrimming({ ...trimming, start: e.target.value })}
                   placeholder="0"
-                  className="bg-black/40 border border-white/[0.08] text-xs text-neutral-100 rounded-md py-1.5 px-2 focus:outline-none focus:ring-1 focus:ring-[#4169e1] focus:border-[#4169e1] w-full font-mono"
+                  className="bg-black/40 border border-white/[0.08] text-xs text-neutral-100 rounded-md py-1.5 px-2 focus:outline-none focus:ring-1 focus:ring-[#45d99a] focus:border-[#45d99a] w-full font-mono"
                 />
               </div>
               <div className="flex flex-col gap-1">
@@ -292,7 +292,7 @@ export default function Soundboard() {
                   value={trimming.end}
                   onChange={e => setTrimming({ ...trimming, end: e.target.value })}
                   placeholder={trimming.duration_ms != null ? (trimming.duration_ms / 1000).toFixed(2) : '∞'}
-                  className="bg-black/40 border border-white/[0.08] text-xs text-neutral-100 rounded-md py-1.5 px-2 focus:outline-none focus:ring-1 focus:ring-[#4169e1] focus:border-[#4169e1] w-full font-mono"
+                  className="bg-black/40 border border-white/[0.08] text-xs text-neutral-100 rounded-md py-1.5 px-2 focus:outline-none focus:ring-1 focus:ring-[#45d99a] focus:border-[#45d99a] w-full font-mono"
                 />
               </div>
             </div>
@@ -305,7 +305,7 @@ export default function Soundboard() {
             <div className="flex items-center justify-between border-t border-white/[0.08] pt-3 mt-1">
               <button
                 onClick={clearTrim}
-                className="bg-white/[0.04] border border-white/[0.08] hover:bg-[#df4c55]/15 hover:border-[#df4c55]/60 hover:text-[#df4c55] text-neutral-400 text-xs font-semibold py-1.5 px-3 rounded-md transition-colors"
+                className="bg-white/[0.04] border border-white/[0.08] hover:bg-[#ff6b6e]/15 hover:border-[#ff6b6e]/60 hover:text-[#ff6b6e] text-neutral-400 text-xs font-semibold py-1.5 px-3 rounded-md transition-colors"
               >
                 Clear trim
               </button>
@@ -318,7 +318,7 @@ export default function Soundboard() {
                 </button>
                 <button
                   onClick={commitTrim}
-                  className="bg-[#4169e1] hover:bg-[#5478e8] text-white text-xs font-bold py-1.5 px-4 rounded-md transition-colors shadow-[0_1px_3px_rgba(65,105,225,0.35)]"
+                  className="bg-[#45d99a] hover:bg-[#6fe0b3] text-black text-xs font-bold py-1.5 px-4 rounded-md transition-colors shadow-[0_1px_3px_rgba(69,217,154,0.35)]"
                 >
                   Save trim
                 </button>

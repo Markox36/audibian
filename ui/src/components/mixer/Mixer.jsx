@@ -7,6 +7,8 @@ import { ConfigModal } from './ConfigModal'
 import { HeaderRail } from './HeaderRail'
 import { InputStrip } from './InputStrip'
 import { MasterStrip } from './MasterStrip'
+import { MidiStrip } from './MidiStrip'
+import { PluginFooter } from './PluginFooter'
 import { ReturnStrip } from './ReturnStrip'
 
 
@@ -14,6 +16,7 @@ export default function Mixer({ graph }) {
   const [config, setConfig] = useState({
     input_channels: [],
     return_channels: [],
+    midi_channels: [],
     sends: [],
     master_sink: null,
     master_pan: 0,
@@ -28,6 +31,12 @@ export default function Mixer({ graph }) {
   const [soloSet, setSoloSet] = useState(new Set())
   const [draggedInfo, setDraggedInfo] = useState(null)
   const [dragOverId, setDragOverId] = useState(null)
+  const [selectedMidiId, setSelectedMidiId] = useState(null)
+  const [loadedMidiIds, setLoadedMidiIds] = useState(new Set())
+
+  const refreshLoadedMidi = () => {
+    invoke('midi_loaded_channel_ids').then(ids => setLoadedMidiIds(new Set(ids))).catch(console.error)
+  }
 
   const loadConfig = () => {
     invoke('get_mixer_config').then(cfg => {
@@ -42,12 +51,17 @@ export default function Mixer({ graph }) {
           const k = `ret-${r.id}`
           if (next[k] === undefined && typeof r.fader === 'number') next[k] = r.fader * 100
         }
+        for (const m of cfg.midi_channels || []) {
+          const k = `midi-${m.id}`
+          if (next[k] === undefined && typeof m.fader === 'number') next[k] = m.fader * 100
+        }
         if (next.master === undefined && typeof cfg.master_fader === 'number') next.master = cfg.master_fader * 100
         return next
       })
       setLoading(false)
     }).catch(console.error)
     invoke('get_solo_set').then(keys => setSoloSet(new Set(keys))).catch(console.error)
+    refreshLoadedMidi()
   }
 
   const peakBufferRef = useRef({})
@@ -169,8 +183,28 @@ export default function Mixer({ graph }) {
     })
   }, [])
 
+  const handleMidiSoloToggle = useCallback((id) => {
+    const key = `midi-${id}`
+    setSoloSet(prev => {
+      const next = new Set(prev)
+      const willActivate = !next.has(key)
+      if (willActivate) next.add(key); else next.delete(key)
+      invoke('midi_channel_set_solo', { id, solo: willActivate }).then(() => loadConfig()).catch(console.error)
+      return next
+    })
+  }, [])
+
+  const handleMidiRemove = useCallback((id) => {
+    invoke('midi_channel_remove', { id }).then(() => {
+      setSelectedMidiId(sel => sel === id ? null : sel)
+      loadConfig()
+    }).catch(console.error)
+  }, [])
+
   const sortedInputs = useMemo(() => config.input_channels.slice().sort((a, b) => a.order - b.order), [config.input_channels])
   const sortedReturns = useMemo(() => config.return_channels.slice().sort((a, b) => a.order - b.order), [config.return_channels])
+  const sortedMidi = useMemo(() => (config.midi_channels || []).slice().sort((a, b) => a.order - b.order), [config.midi_channels])
+  const selectedMidiChannel = sortedMidi.find(c => c.id === selectedMidiId) || null
 
   if (loading) {
     return (
@@ -195,7 +229,7 @@ export default function Mixer({ graph }) {
           <Activity className="w-3.5 h-3.5" style={{ color: GREEN }} />
           <span className="text-[10px] font-black tracking-[0.22em] uppercase" style={{ color: CREAM }}>Mixer</span>
           <span className="text-[9px] font-mono" style={{ color: RAIL_TEXT }}>
-            {sortedInputs.length} in · {sortedReturns.length} ret
+            {sortedInputs.length} in · {sortedMidi.length} midi · {sortedReturns.length} ret
           </span>
         </div>
         <div className="flex items-center gap-2 sm:gap-3 flex-wrap">
@@ -206,6 +240,14 @@ export default function Mixer({ graph }) {
           >
             <Plus className="w-3 h-3" style={{ color: GREEN }} />
             Input
+          </button>
+          <button
+            onClick={() => invoke('midi_channel_add', { name: `MIDI ${sortedMidi.length + 1}` }).then(loadConfig).catch(console.error)}
+            className="text-[9px] font-bold uppercase tracking-wider py-1 px-2.5 rounded-md flex items-center gap-1.5"
+            style={{ backgroundColor: STRIP_BG, color: CREAM, border: `1px solid ${FAINT}` }}
+          >
+            <Plus className="w-3 h-3" style={{ color: GREEN }} />
+            MIDI
           </button>
           <button
             onClick={openNewReturnDialog}
@@ -233,6 +275,7 @@ export default function Mixer({ graph }) {
             gridTemplateColumns: [
               RAIL_WIDTH,
               `repeat(${sortedInputs.length}, ${STRIP_WIDTH})`,
+              `repeat(${sortedMidi.length}, ${STRIP_WIDTH})`,
               // Pushes returns to the right edge, and collapses to just the
               // divider once enough strips exist to fill the row.
               'minmax(17px, 1fr)',
@@ -276,6 +319,27 @@ export default function Mixer({ graph }) {
                 isDragOverTarget={dragOverId === ch.id}
                 soloActive={soloSet.has(`in-${ch.id}`)}
                 onSoloToggle={handleSoloToggle}
+                dbL={peak?.l ?? peakDb}
+                dbR={peak?.r ?? peakDb}
+              />
+            )
+          })}
+
+          {sortedMidi.map(ch => {
+            const peak = peaks[ch.sink_name]
+            const peakDb = typeof peak === 'number' ? peak : peak?.db ?? -60
+            return (
+              <MidiStrip
+                key={ch.id}
+                ch={ch}
+                loaded={loadedMidiIds.has(ch.id)}
+                selected={selectedMidiId === ch.id}
+                onSelect={() => setSelectedMidiId(sel => sel === ch.id ? null : ch.id)}
+                faderVal={getFader(`midi-${ch.id}`)}
+                setFader={setFader}
+                onRemove={handleMidiRemove}
+                soloActive={soloSet.has(`midi-${ch.id}`)}
+                onSoloToggle={handleMidiSoloToggle}
                 dbL={peak?.l ?? peakDb}
                 dbR={peak?.r ?? peakDb}
               />
@@ -348,6 +412,13 @@ export default function Mixer({ graph }) {
           />
         </div>
       </div>
+
+      <PluginFooter
+        channel={selectedMidiChannel}
+        loaded={selectedMidiChannel ? loadedMidiIds.has(selectedMidiChannel.id) : false}
+        onClose={() => setSelectedMidiId(null)}
+        onRefresh={() => { loadConfig() }}
+      />
 
       {/* Modals */}
       {modal && <ConfigModal modal={modal} onSave={saveModal} onCancel={() => setModal(null)} />}

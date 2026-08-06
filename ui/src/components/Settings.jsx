@@ -26,10 +26,10 @@ export default function Settings({ uiScale, onScaleChange }) {
   }
 
   return (
-    <div className="flex-1 flex flex-col items-center justify-center p-6 bg-[#171717] text-neutral-300">
+    <div className="flex-1 flex flex-col items-center justify-center p-6 bg-[#101013] text-neutral-300">
       <div className="max-w-md w-full border border-white/[0.08] bg-white/[0.05] rounded-xl p-6 flex flex-col gap-6 shadow-xl">
         <div className="flex items-center gap-3 border-b border-white/[0.08] pb-4">
-          <SettingsIcon className="w-5 h-5 text-[#4169e1]" />
+          <SettingsIcon className="w-5 h-5 text-[#45d99a]" />
           <h2 className="text-sm font-bold uppercase tracking-wider text-neutral-200">Application Settings</h2>
         </div>
 
@@ -47,7 +47,7 @@ export default function Settings({ uiScale, onScaleChange }) {
                   key={p.value}
                   className={`flex items-center justify-center rounded-md text-xs font-bold py-2 px-3 border transition-colors outline-none ${
                     isActive
-                      ? 'bg-[#4169e1] border-[#4169e1] text-black hover:bg-[#5578e8]'
+                      ? 'bg-[#45d99a] border-[#45d99a] text-black hover:bg-[#6fe0b3]'
                       : 'bg-white/[0.05] border-white/[0.08] text-neutral-400 hover:bg-white/[0.07] hover:text-neutral-100'
                   }`}
                   onClick={() => save(p.value)}

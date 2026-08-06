@@ -1,18 +1,18 @@
 * { box-sizing: border-box; margin: 0; padding: 0; }
 
 :root {
-  --bg:           #171717;
-  --surface:      rgba(255, 255, 255, 0.05);
+  --bg:           #101013;
+  --surface:      rgba(255, 255, 255, 0.055);
   --surface2:     rgba(255, 255, 255, 0.09);
-  --accent:       #4169e1;
-  --accent-hover: #5578e8;
-  --accent-dim:   rgba(65, 105, 225, 0.14);
-  --text:         #f2f2f2;
-  --text-dim:     #7a7a7a;
-  --danger:       #df4c55;
-  --danger-hover: #e86870;
-  --success:      #38b868;
-  --border:       rgba(255, 255, 255, 0.08);
+  --accent:       #45d99a;
+  --accent-hover: #6fe0b3;
+  --accent-dim:   rgba(69, 217, 154, 0.14);
+  --text:         #eceade;
+  --text-dim:     #9a988c;
+  --danger:       #ff6b6e;
+  --danger-hover: #ff8184;
+  --success:      #45d99a;
+  --border:       rgba(255, 255, 255, 0.14);
   color-scheme: dark;
 }
 
@@ -1102,13 +1102,13 @@ select:focus, .select-input:focus { border-color: var(--accent); }
 
 /* ─── Matrix — split-panel UI ───────────────────────────────────── */
 .mx-conn:hover {
-  background: rgba(65, 105, 225, 0.35) !important;
-  border-color: rgba(65, 105, 225, 0.8) !important;
+  background: rgba(69, 217, 154, 0.35) !important;
+  border-color: rgba(69, 217, 154, 0.8) !important;
   transform: scale(1.08);
   transition: transform 80ms ease-out, background 80ms;
 }
 .mx-conn[aria-pressed="true"]:hover {
-  background: #5578e8 !important;
+  background: #6fe0b3 !important;
 }
 .mx-side-item:hover {
   background: rgba(255, 255, 255, 0.05) !important;

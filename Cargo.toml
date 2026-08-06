@@ -1,6 +1,6 @@
 [package]
 name = "audibian"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2021"
 description = "Audio manager for Debian — patchbay, mixer, EQ and profiles over PipeWire"
 license = "GPL-3.0"
@@ -35,9 +35,11 @@ env_logger = "0.11"
 
 async-channel = "2"
 
-rosc = "0.10"
+midir = "0.11"
 
 raw-window-handle = "0.6"
+
+vst3-host = "0.4"
 
 [target.'cfg(target_os = "linux")'.dependencies]
 x11rb = "0.13"

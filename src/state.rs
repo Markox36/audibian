@@ -41,9 +41,15 @@ pub struct AppState {
     /// Currently playing `paplay` children, one per Play click. Reaped on
     /// next Play and on Stop-all. Drop kills survivors at process exit.
     pub soundboard_procs: Arc<Mutex<Vec<std::process::Child>>>,
-    /// Carla rack child process per MIDI channel id. Spawned lazily when
-    /// the user opens the host GUI; killed on channel removal / app exit.
-    pub midi_carla_procs: Arc<Mutex<HashMap<u32, std::process::Child>>>,
+    /// In-process VST3 plugin host per MIDI channel id (see `src/midi/`).
+    /// Spawned lazily when the user loads a plugin; torn down on channel
+    /// removal / app exit. Replaces the old Carla-subprocess-over-OSC
+    /// design, which turned out to be unfixable on this machine (the
+    /// packaged Carla build has no OSC/liblo support at all).
+    pub midi_plugin_hosts: Arc<Mutex<HashMap<u32, crate::midi::host::PluginHostHandle>>>,
+    /// Background MIDI input bridge that forwards keyboard events to all
+    /// loaded plugin hosts.
+    pub midi_input_router: Arc<Mutex<Option<crate::midi::input::MidiInputRouterHandle>>>,
     /// X11 window id of audibian's main toplevel. Captured at setup so the
     /// MIDI rack can reparent plugin GUIs into it. Zero on Wayland or when
     /// the handle couldn't be resolved.

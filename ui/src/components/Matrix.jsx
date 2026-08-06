@@ -34,7 +34,10 @@ const HIDDEN_APP_NAMES = new Set([
 ])
 
 const isAudioNode = (n) =>
-  (n.media_class?.startsWith('Audio') || n.media_class?.startsWith('Stream')) &&
+  // 'Midi' covers MIDI controller/keyboard nodes (e.g. a channel's own
+  // MIDI-in port, or a hardware controller) so they're wireable here too,
+  // the same way audio routing already works.
+  (n.media_class?.startsWith('Audio') || n.media_class?.startsWith('Stream') || n.media_class?.startsWith('Midi')) &&
   !HIDDEN_NODE_RE.test(n.name || '') &&
   !HIDDEN_APP_NAMES.has(n.app_name || '')
 
@@ -233,11 +236,11 @@ export default function Matrix({ graph, onCreateLink, onDestroyLink }) {
 
   if (!nodes.filter(isAudioNode).length) {
     return (
-      <div className="flex-1 flex items-center justify-center bg-[#171717]">
+      <div className="flex-1 flex items-center justify-center bg-[#101013]">
         <div className="flex flex-col items-center gap-3.5 p-8 rounded-2xl border border-white/[0.08] bg-[#1b1b1b] max-w-xs text-center">
-          <Unplug className="w-9 h-9 text-[#7a7a7a] opacity-50" />
-          <p className="text-sm font-semibold text-[#f2f2f2]">No Audio Nodes Detected</p>
-          <p className="text-xs text-[#7a7a7a] leading-relaxed">
+          <Unplug className="w-9 h-9 text-[#9a988c] opacity-50" />
+          <p className="text-sm font-semibold text-[#eceade]">No Audio Nodes Detected</p>
+          <p className="text-xs text-[#9a988c] leading-relaxed">
             Connect audio sources or streams to view them in the connection matrix.
           </p>
         </div>
@@ -246,7 +249,7 @@ export default function Matrix({ graph, onCreateLink, onDestroyLink }) {
   }
 
   return (
-    <div className="flex-1 flex h-full overflow-hidden bg-[#171717] text-[#f2f2f2] font-sans">
+    <div className="flex-1 flex h-full overflow-hidden bg-[#101013] text-[#eceade] font-sans">
 
       {/* ── SIDEBAR ──────────────────────────────────────────────── */}
       <aside className="w-[280px] min-w-[280px] flex flex-col border-r border-white/[0.08] bg-[#1b1b1b]">
@@ -258,8 +261,8 @@ export default function Matrix({ graph, onCreateLink, onDestroyLink }) {
               key={k}
               onClick={() => { setDirection(k); setSelectedId(null) }}
               className={`flex-1 py-1.5 px-2 text-[11px] font-bold uppercase tracking-[0.06em] rounded-md cursor-pointer transition-colors ${direction === k
-                ? 'bg-[#4169e1] text-white'
-                : 'bg-transparent text-[#7a7a7a] border border-white/[0.08]'
+                ? 'bg-[#45d99a] text-black'
+                : 'bg-transparent text-[#9a988c] border border-white/[0.08]'
                 }`}
             >
               {lbl}
@@ -270,13 +273,13 @@ export default function Matrix({ graph, onCreateLink, onDestroyLink }) {
         {/* Search */}
         <div className="p-2 border-b border-white/[0.08]">
           <div className="flex items-center gap-1.5 px-2.5 py-1.5 bg-white/[0.04] border border-white/[0.08] rounded-md">
-            <Search className="w-3 h-3 text-[#7a7a7a] shrink-0" />
+            <Search className="w-3 h-3 text-[#9a988c] shrink-0" />
             <input
               type="text"
               value={search}
               onChange={e => setSearch(e.target.value)}
               placeholder="Buscar nodos..."
-              className="flex-1 bg-transparent border-none outline-none text-[#f2f2f2] text-xs placeholder-[#7a7a7a]/60"
+              className="flex-1 bg-transparent border-none outline-none text-[#eceade] text-xs placeholder-[#9a988c]/60"
             />
           </div>
         </div>
@@ -284,7 +287,7 @@ export default function Matrix({ graph, onCreateLink, onDestroyLink }) {
         {/* Node list */}
         <div className="flex-1 overflow-y-auto p-1.5">
           {sidebarNodes.length === 0 ? (
-            <div className="p-4 text-[11px] text-[#7a7a7a] text-center">
+            <div className="p-4 text-[11px] text-[#9a988c] text-center">
               No se encontraron {direction === 'outputs' ? 'entradas' : 'salidas'}.
             </div>
           ) : sidebarNodes.map(n => {
@@ -296,8 +299,8 @@ export default function Matrix({ graph, onCreateLink, onDestroyLink }) {
                 key={n.id}
                 onClick={() => setSelectedId(n.id)}
                 className={`mx-side-item flex items-center justify-between w-full px-2.5 py-2 mb-0.5 gap-2 rounded-md cursor-pointer text-left transition-colors ${isSel
-                  ? 'bg-[#4169e1]/[0.16] border border-[#4169e1]/40 text-[#f2f2f2]'
-                  : 'bg-transparent border border-transparent text-[#7a7a7a]'
+                  ? 'bg-[#45d99a]/[0.16] border border-[#45d99a]/40 text-[#eceade]'
+                  : 'bg-transparent border border-transparent text-[#9a988c]'
                   }`}
                 style={{ borderLeft: `3px solid ${c}` }}
                 title={displayName(n)}
@@ -306,8 +309,8 @@ export default function Matrix({ graph, onCreateLink, onDestroyLink }) {
                   {displayName(n)}
                 </span>
                 <span className={`text-[10px] font-mono px-1.5 py-px rounded shrink-0 ${cnt > 0
-                  ? 'text-[#4169e1] bg-[#4169e1]/[0.12]'
-                  : 'text-[#7a7a7a] bg-white/[0.04]'
+                  ? 'text-[#45d99a] bg-[#45d99a]/[0.12]'
+                  : 'text-[#9a988c] bg-white/[0.04]'
                   }`}>
                   {cnt}
                 </span>
@@ -320,7 +323,7 @@ export default function Matrix({ graph, onCreateLink, onDestroyLink }) {
       {/* ── DETAIL ───────────────────────────────────────────────── */}
       <main className="flex-1 flex flex-col overflow-hidden">
         {!effectiveSelected ? (
-          <div className="flex-1 flex items-center justify-center text-[#7a7a7a] text-sm">
+          <div className="flex-1 flex items-center justify-center text-[#9a988c] text-sm">
             Select a node from the sidebar.
           </div>
         ) : (
@@ -371,8 +374,8 @@ function Detail({
         <div className="flex items-center gap-3">
           <span className="w-2.5 h-2.5 rounded-full shrink-0" style={{ background: c }} />
           <div>
-            <div className="text-sm font-semibold text-[#f2f2f2]">{displayName(node)}</div>
-            <div className="text-[10px] font-mono text-[#7a7a7a] mt-px">
+            <div className="text-sm font-semibold text-[#eceade]">{displayName(node)}</div>
+            <div className="text-[10px] font-mono text-[#9a988c] mt-px">
               {node.media_class} · {myPorts.length} port{myPorts.length !== 1 ? 's' : ''} · {totalConn} active
             </div>
           </div>
@@ -380,9 +383,9 @@ function Detail({
       </div>
 
       {/* Mini-grids scroll */}
-      <div className="flex-1 overflow-y-auto p-4 flex flex-col gap-3">
+      <div className="flex-1 overflow-y-auto p-4 flex flex-wrap content-start gap-3">
         {otherNodes.length === 0 ? (
-          <div className="p-8 text-center text-[#7a7a7a] text-xs">
+          <div className="p-8 text-center text-[#9a988c] text-xs">
             No targets available.
           </div>
         ) : otherNodes.map(other => {
@@ -390,14 +393,14 @@ function Detail({
           if (!otherPorts.length) return null
           const oc = nodeColor(other.media_class)
           return (
-            <div key={other.id} className="border border-white/[0.08] rounded-lg bg-[#1e1e1e] h-[400px]">
+            <div key={other.id} className="border border-white/[0.08] rounded-lg bg-[#1e1e1e] w-fit">
               <div
                 className="flex items-center justify-between px-3.5 py-2 border-b border-white/[0.08]"
                 style={{ borderLeft: `3px solid ${oc}` }}
               >
                 <div className="flex items-center gap-2.5">
-                  <span className="text-xs font-semibold text-[#f2f2f2]">{displayName(other)}</span>
-                  <span className="text-[9px] font-mono text-[#7a7a7a] uppercase tracking-[0.05em]">
+                  <span className="text-xs font-semibold text-[#eceade]">{displayName(other)}</span>
+                  <span className="text-[9px] font-mono text-[#9a988c] uppercase tracking-[0.05em]">
                     {other.media_class}
                   </span>
                 </div>
@@ -407,8 +410,8 @@ function Detail({
                     disabled={!myPorts.length || !otherPorts.length}
                     className={`px-2 py-0.5 rounded border text-[10px] font-semibold transition-colors cursor-pointer disabled:opacity-40 disabled:cursor-default ${
                       getConnMode(other.id) === 'mono'
-                        ? 'bg-[#4169e1] border-[#4169e1] text-white'
-                        : 'bg-white/[0.04] border-white/[0.08] text-[#7a7a7a] hover:text-[#f2f2f2] hover:bg-white/[0.1]'
+                        ? 'bg-[#45d99a] border-[#45d99a] text-black'
+                        : 'bg-white/[0.04] border-white/[0.08] text-[#9a988c] hover:text-[#eceade] hover:bg-white/[0.1]'
                     }`}
                   >
                     Mono
@@ -418,8 +421,8 @@ function Detail({
                     disabled={myPorts.length < 2 || otherPorts.length < 2}
                     className={`px-2 py-0.5 rounded border text-[10px] font-semibold transition-colors cursor-pointer disabled:opacity-40 disabled:cursor-default ${
                       getConnMode(other.id) === 'stereo'
-                        ? 'bg-[#4169e1] border-[#4169e1] text-white'
-                        : 'bg-white/[0.04] border-white/[0.08] text-[#7a7a7a] hover:text-[#f2f2f2] hover:bg-white/[0.1]'
+                        ? 'bg-[#45d99a] border-[#45d99a] text-black'
+                        : 'bg-white/[0.04] border-white/[0.08] text-[#9a988c] hover:text-[#eceade] hover:bg-white/[0.1]'
                     }`}
                   >
                     Stereo
@@ -432,7 +435,7 @@ function Detail({
                     <tr>
                       <th />
                       {otherPorts.map(p => (
-                        <th key={p.id} className="text-[9px] font-mono font-semibold text-[#7a7a7a] px-1.5 py-0.5 text-center min-w-[44px] uppercase tracking-[0.03em]">
+                        <th key={p.id} className="text-[9px] font-mono font-semibold text-[#9a988c] px-1.5 py-0.5 text-center min-w-[44px] uppercase tracking-[0.03em]">
                           {p.name}
                         </th>
                       ))}
@@ -441,8 +444,8 @@ function Detail({
                   <tbody>
                     {myPorts.map(mp => (
                       <tr key={mp.id}>
-                        <td className="text-[10px] font-mono text-[#7a7a7a] px-2.5 py-1 text-right whitespace-nowrap">
-                          {mp.name} <span className="text-[#4169e1] font-bold">→</span>
+                        <td className="text-[10px] font-mono text-[#9a988c] px-2.5 py-1 text-right whitespace-nowrap">
+                          {mp.name} <span className="text-[#45d99a] font-bold">→</span>
                         </td>
                         {otherPorts.map(op => {
                           const conn = isConnected(mp, op)
@@ -450,7 +453,7 @@ function Detail({
                             <td key={op.id} className="p-0">
                               <button
                                 className={`mx-conn w-7 h-7 block mx-auto rounded-md cursor-pointer p-0 ${conn
-                                  ? 'bg-[#4169e1] border border-[#4169e1]/70'
+                                  ? 'bg-[#45d99a] border border-[#45d99a]/70'
                                   : 'bg-white/[0.04] border border-white/[0.08]'
                                   }`}
                                 onClick={() => toggleConn(mp, op)}
@@ -476,7 +479,7 @@ function Detail({
 
         <button
           onClick={clearNode}
-          className="mx-btn inline-flex items-center gap-1.5 px-3 py-1.5 bg-[#df4c55]/[0.12] text-[#df4c55] border border-[#df4c55]/30 rounded-md cursor-pointer text-[11px] font-semibold"
+          className="mx-btn inline-flex items-center gap-1.5 px-3 py-1.5 bg-[#ff6b6e]/[0.12] text-[#ff6b6e] border border-[#ff6b6e]/30 rounded-md cursor-pointer text-[11px] font-semibold"
         >
           <X className="w-3 h-3" />
           Clear all

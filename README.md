@@ -18,7 +18,7 @@ Tested on **Debian 13 (Trixie)** with PipeWire ≥ 1.2.
 | 🎛️ **Per-strip EQ** | Parametric EQ applied per strip through a PipeWire filter-chain virtual sink. |
 | 🎙️ **Noise Suppression** | Per-microphone WebRTC noise suppression. Creates a virtual clean source (`audibian-ns-…`) that any app can select instead of the raw mic. |
 | 🔊 **Soundboard** | Trigger sound files into a dedicated `audibian_soundboard` strip, with optional start/end trimming via ffmpeg. |
-| 🎹 **MIDI** | MIDI channel management with plugin hosting; plugin GUIs are reparented into the main window on X11. |
+| 🎹 **MIDI** | MIDI channel management with native, in-process VST3 plugin hosting (no external Carla dependency); each MIDI channel gets its own mixer strip with fader, pan, mute and solo; plugin GUIs are reparented into the main window on X11. |
 | 💾 **Audio Profiles** | Save and restore complete audio states as TOML files under `~/.config/audibian/profiles/`. |
 | ⚡ **Persistent Routing** | `audibian --apply-persistent` recreates the whole graph headlessly. Ship it as a systemd user unit and your routing is live from login, with or without the GUI. |
 | 🚀 **Autostart** | One toggle creates an XDG autostart entry (`~/.config/autostart/audibian.desktop`) so Audibian launches with your desktop session. |
@@ -216,6 +216,10 @@ src/
 │   ├── eq.rs                # Biquad EQ math (Audio EQ Cookbook)
 │   ├── strip_eq.rs          # Per-strip EQ filter-chain instances
 │   └── effects.rs           # EQ & noise suppression subprocess management
+├── midi/
+│   ├── host.rs               # In-process VST3 plugin hosting (vst3-host)
+│   ├── stream.rs             # PipeWire audio-out stream driving the plugin process callback
+│   └── input.rs              # MIDI input routing into hosted plugins
 ├── mixer/
 │   ├── config.rs            # Inputs, returns, sends, master
 │   └── snapshot.rs          # Fader/mute/pan snapshot serialisation
@@ -281,6 +285,28 @@ a second real instance competes for the PipeWire graph and leaves duplicate
 - Never `let _ = Command::spawn()`. Use `proc::CommandExt::spawn_detached` for
   fire-and-forget subprocesses, or keep the `Child` and reap it yourself —
   dropping it leaks a zombie.
+
+---
+
+## Changelog
+
+### v0.2.0
+
+- **Native VST3 hosting**: MIDI plugins now run in-process via the `vst3-host`
+  crate instead of being driven through an external Carla subprocess over OSC.
+  Removes the Carla runtime dependency and the `rosc` crate.
+- MIDI channels are now full mixer strips (fader, pan, mute, solo, level
+  metering) alongside inputs and returns, with per-channel plugin GUI controls
+  in the mixer footer.
+- Plugin GUI windows are shown/hidden directly through the new host handle.
+- App-wide UI pass reusing the mixer's visual language across Matrix,
+  Soundboard, Effects, Profiles and Settings.
+
+### v0.1.0
+
+- Initial public release: routing matrix, mixer with sends/returns, per-strip
+  EQ, noise suppression, soundboard, MIDI/Carla plugin hosting, audio
+  profiles, persistent routing and autostart.
 
 ---
 

@@ -5,6 +5,7 @@ mod state;
 mod mixer;
 mod matrix_config;
 mod meter;
+mod midi;
 mod persistent;
 mod proc;
 mod soundboard;
@@ -13,6 +14,7 @@ mod x11_embed;
 
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
+use log::debug;
 use audio::{AudioGraph, PwEvent, PwThread};
 use profiles::{AppConfig, ProfileStore};
 use mixer::MixerConfig;
@@ -99,6 +101,8 @@ fn main() {
             let master_loopback_module = Arc::new(Mutex::new(None::<u32>));
             let solo_set = Arc::new(Mutex::new(std::collections::HashSet::<String>::new()));
             let strip_eq_instances = Arc::new(Mutex::new(HashMap::<String, audio::strip_eq::StripEqInstance>::new()));
+            let midi_plugin_hosts = Arc::new(Mutex::new(HashMap::new()));
+            let midi_input_router = Arc::new(Mutex::new(midi::input::MidiInputRouterHandle::start(midi_plugin_hosts.clone())));
             {
                 let ret_ids = mixer_module_ids.clone();
                 let inp_ids = input_module_ids.clone();
@@ -141,7 +145,8 @@ fn main() {
                 meter_rx: meter_rx.clone(),
                 soundboard_config: Arc::new(Mutex::new(soundboard_cfg)),
                 soundboard_procs: Arc::new(Mutex::new(Vec::new())),
-                midi_carla_procs: Arc::new(Mutex::new(HashMap::new())),
+                midi_plugin_hosts,
+                midi_input_router,
                 #[cfg(target_os = "linux")]
                 main_xid: Arc::new(Mutex::new(0)),
                 #[cfg(target_os = "linux")]
@@ -322,19 +327,24 @@ fn main() {
             commands::soundboard_set_trim,
             commands::soundboard_play,
             commands::soundboard_stop_all,
-            commands::midi_carla_available,
             commands::midi_channel_list,
             commands::midi_channel_add,
             commands::midi_channel_remove,
             commands::midi_channel_rename,
+            commands::midi_plugin_scan,
             commands::midi_plugin_add,
             commands::midi_plugin_remove,
             commands::midi_plugin_reorder,
-            commands::midi_channel_open_gui,
-            commands::midi_channel_close_gui,
+            commands::midi_plugin_load,
+            commands::midi_plugin_unload,
+            commands::midi_loaded_channel_ids,
+            commands::midi_plugin_test_note,
+            commands::midi_channel_set_volume,
+            commands::midi_channel_set_pan,
+            commands::midi_channel_set_mute,
+            commands::midi_channel_set_solo,
             commands::midi_plugin_show_native_gui,
             commands::midi_plugin_hide_native_gui,
-            commands::midi_channel_sync_plugins,
             commands::midi_plugin_embed_gui,
             commands::midi_plugin_position_gui,
             commands::midi_plugin_unembed_gui,
@@ -371,6 +381,8 @@ fn handle_pw_event(event: PwEvent, graph: &Arc<Mutex<AudioGraph>>, app: &tauri::
                     Some(node.name.clone())
                 } else if mixer_cfg.input_channels.iter().any(|c| c.sink_name == node.name) {
                     Some(node.name.clone())
+                } else if mixer_cfg.midi_channels.iter().any(|c| c.sink_name == node.name) {
+                    Some(node.name.clone())
                 } else {
                     None
                 };
@@ -406,12 +418,40 @@ fn handle_pw_event(event: PwEvent, graph: &Arc<Mutex<AudioGraph>>, app: &tauri::
                     });
                 }
 
+                // Same for MIDI/plugin channel sinks. This is the mechanism
+                // that actually matters for them: their sink is created at
+                // `midi_channel_add` time, long before a plugin is loaded and
+                // starts producing audio, so unlike input channels there's no
+                // guarantee this NodeAdded fires anywhere near channel
+                // creation — it just needs to fire once, whenever the node
+                // shows up, which this handler guarantees regardless of
+                // system load (a single fixed-delay attempt at creation time
+                // does not).
+                let midi_ch = mixer_cfg.midi_channels.iter()
+                    .find(|c| c.sink_name == node.name)
+                    .cloned();
+                if let Some(ch) = midi_ch {
+                    let app_clone = app.clone();
+                    let sink_name = ch.sink_name.clone();
+                    std::thread::spawn(move || {
+                        std::thread::sleep(std::time::Duration::from_millis(300));
+                        let state = app_clone.state::<crate::state::AppState>();
+                        let graph = state.graph.lock().unwrap();
+                        crate::commands::connect_nodes(
+                            &graph, &sink_name,
+                            crate::commands::MASTER_SINK_NAME,
+                            &state.pw, false,
+                        );
+                    });
+                }
+
                 if node.name == crate::commands::MASTER_SINK_NAME {
                     let app_clone = app.clone();
                     // Returns NEVER auto-route to master — only inputs do.
                     let returns: Vec<String> = Vec::new();
                     let inputs: Vec<String> = mixer_cfg.input_channels.iter()
                         .map(|c| c.sink_name.clone())
+                        .chain(mixer_cfg.midi_channels.iter().map(|c| c.sink_name.clone()))
                         .collect();
                     std::thread::spawn(move || {
                         std::thread::sleep(std::time::Duration::from_millis(300));
@@ -475,8 +515,11 @@ fn handle_pw_event(event: PwEvent, graph: &Arc<Mutex<AudioGraph>>, app: &tauri::
                 let state = app2.state::<crate::state::AppState>();
                 let matrix_cfg = state.matrix_config.lock().unwrap().clone();
                 if !matrix_cfg.connections_involving(&node_name).is_empty() {
+                    let mixer_cfg = state.mixer_config.lock().unwrap().clone();
                     let graph = state.graph.lock().unwrap();
-                    crate::commands::restore_matrix_connections(&matrix_cfg, &graph, &state.pw, &node_name);
+                    crate::commands::restore_matrix_connections(
+                        &matrix_cfg, &graph, &state.pw, &mixer_cfg, &node_name,
+                    );
                 }
             });
         }
@@ -519,7 +562,40 @@ fn handle_pw_event(event: PwEvent, graph: &Arc<Mutex<AudioGraph>>, app: &tauri::
         }
         PwEvent::LinkAdded(link) => {
             app.emit("pw-link-added", &link).ok();
+            let (output_node_id, input_node_id) = (link.output_node_id, link.input_node_id);
             graph.lock().unwrap().add_link(link);
+
+            // Whoever created this link — the session manager, a restored
+            // Matrix entry, the user clicking a Matrix cell — an app stream
+            // must never end up with two routes carrying the same audio: on
+            // playback the app is heard twice, on capture the peers hear a
+            // comb-filtered, robotic version of the microphone.
+            let state = app.state::<crate::state::AppState>();
+            let g = graph.lock().unwrap();
+            let stream_id = [output_node_id, input_node_id].into_iter().find(|id| {
+                g.nodes.get(id)
+                    .and_then(|n| n.media_class.as_deref())
+                    .is_some_and(|c| c.starts_with("Stream/"))
+            });
+            if let Some(stream_id) = stream_id {
+                let mixer_cfg = state.mixer_config.lock().unwrap().clone();
+                let cut = crate::commands::enforce_single_route(
+                    &g, &state.pw, &mixer_cfg, stream_id,
+                );
+                if !cut.is_empty() {
+                    let stream_name = g.nodes.get(&stream_id)
+                        .map(|n| n.name.clone()).unwrap_or_default();
+                    debug!("'{stream_name}': dropped duplicate route(s) to/from {cut:?}");
+                    // Drop the offending pairs from matrix.toml too, so they
+                    // are not resurrected on the next launch of the app.
+                    let mut mcfg = state.matrix_config.lock().unwrap();
+                    for peer in &cut {
+                        mcfg.set_node_pair(&stream_name, peer, Vec::new());
+                        mcfg.set_node_pair(peer, &stream_name, Vec::new());
+                    }
+                    mcfg.save();
+                }
+            }
         }
         PwEvent::LinkRemoved(id) => {
             graph.lock().unwrap().remove_link(id);

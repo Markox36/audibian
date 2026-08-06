@@ -63,11 +63,11 @@ export default function Profiles() {
   }
 
   return (
-    <div className="flex-1 overflow-auto bg-[#171717] p-6 flex flex-col gap-6 text-neutral-300 font-sans">
+    <div className="flex-1 overflow-auto bg-[#101013] p-6 flex flex-col gap-6 text-neutral-300 font-sans">
       {/* Floating Status Notification Toast */}
       {status && (
         <div className="fixed bottom-6 right-6 z-50 flex items-center gap-2 bg-white/[0.05] border border-white/10 text-neutral-100 px-4 py-3 rounded-lg shadow-2xl animate-in fade-in slide-in-from-bottom-4 duration-300">
-          <Sparkles className="w-4 h-4 text-[#4169e1]" />
+          <Sparkles className="w-4 h-4 text-[#45d99a]" />
           <span className="text-xs font-semibold">{status}</span>
         </div>
       )}
@@ -79,7 +79,7 @@ export default function Profiles() {
         <div className="border border-white/[0.08] bg-white/[0.05] rounded-xl p-6 flex flex-col gap-4 shadow-lg">
           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-white/[0.08] pb-4">
             <div className="flex items-center gap-3">
-              <FolderHeart className="w-5 h-5 text-[#4169e1]" />
+              <FolderHeart className="w-5 h-5 text-[#45d99a]" />
               <h2 className="text-sm font-bold uppercase tracking-wider text-neutral-200">Audio Profiles</h2>
             </div>
             
@@ -91,12 +91,12 @@ export default function Profiles() {
                 value={newName}
                 onChange={e => setNewName(e.target.value)}
                 onKeyDown={e => e.key === 'Enter' && snapshotProfile()}
-                className="bg-white/[0.05] border border-white/10 text-xs text-neutral-100 rounded-md py-1.5 px-3 w-44 placeholder-neutral-600 focus:outline-none focus:ring-1 focus:ring-[#4169e1] focus:border-[#4169e1]"
+                className="bg-white/[0.05] border border-white/10 text-xs text-neutral-100 rounded-md py-1.5 px-3 w-44 placeholder-neutral-600 focus:outline-none focus:ring-1 focus:ring-[#45d99a] focus:border-[#45d99a]"
               />
               <button 
                 onClick={snapshotProfile} 
                 disabled={!newName.trim()}
-                className="inline-flex items-center gap-1.5 bg-[#4169e1] hover:bg-[#5578e8] disabled:opacity-40 disabled:hover:bg-[#4169e1] text-black font-extrabold text-[10px] tracking-wider uppercase py-1.5 px-3 rounded-md transition-colors"
+                className="inline-flex items-center gap-1.5 bg-[#45d99a] hover:bg-[#6fe0b3] disabled:opacity-40 disabled:hover:bg-[#45d99a] text-black font-extrabold text-[10px] tracking-wider uppercase py-1.5 px-3 rounded-md transition-colors"
               >
                 <Save className="w-3.5 h-3.5" />
                 Save Current
@@ -118,14 +118,14 @@ export default function Profiles() {
                     key={name} 
                     className={`flex items-center justify-between border rounded-lg p-3.5 transition-all ${
                       isDefault 
-                        ? 'border-[#4169e1]/30 bg-[#4169e1]/[0.03] hover:bg-[#4169e1]/[0.05]' 
+                        ? 'border-[#45d99a]/30 bg-[#45d99a]/[0.03] hover:bg-[#45d99a]/[0.05]' 
                         : 'border-white/[0.08] bg-white/[0.03] hover:border-white/[0.12] hover:bg-white/[0.06]/20'
                     }`}
                   >
                     <div className="flex items-center gap-2.5 min-w-0">
                       <span className="text-xs font-bold text-neutral-200 truncate">{name}</span>
                       {isDefault && (
-                        <span className="bg-[#4169e1]/10 text-[#4169e1] border border-[#4169e1]/20 px-2 py-0.5 rounded-full text-[9px] font-bold tracking-wider uppercase">
+                        <span className="bg-[#45d99a]/10 text-[#45d99a] border border-[#45d99a]/20 px-2 py-0.5 rounded-full text-[9px] font-bold tracking-wider uppercase">
                           default
                         </span>
                       )}
@@ -137,7 +137,7 @@ export default function Profiles() {
                         onClick={() => setDefaultProfile(isDefault ? '' : name)}
                         title={isDefault ? 'Remove default status' : 'Set as default profile'}
                         className={`p-1.5 rounded hover:bg-white/[0.1] transition-colors ${
-                          isDefault ? 'text-[#4169e1]' : 'text-neutral-500 hover:text-neutral-300'
+                          isDefault ? 'text-[#45d99a]' : 'text-neutral-500 hover:text-neutral-300'
                         }`}
                       >
                         <Star className="w-4 h-4 fill-current" />
@@ -173,7 +173,7 @@ export default function Profiles() {
         {config && (
           <div className="border border-white/[0.08] bg-white/[0.05] rounded-xl p-6 flex flex-col gap-4 shadow-lg">
             <div className="flex items-center gap-3 border-b border-white/[0.08] pb-4">
-              <Settings2 className="w-5 h-5 text-[#4169e1]" />
+              <Settings2 className="w-5 h-5 text-[#45d99a]" />
               <h2 className="text-sm font-bold uppercase tracking-wider text-neutral-200">Startup Behavior</h2>
             </div>
             
@@ -186,7 +186,7 @@ export default function Profiles() {
                 <select
                   value={config.default_profile || ''}
                   onChange={e => setDefaultProfile(e.target.value)}
-                  className="bg-white/[0.05] border border-white/10 text-xs text-neutral-100 rounded-md py-1.5 px-3 focus:outline-none focus:ring-1 focus:ring-[#4169e1] cursor-pointer"
+                  className="bg-white/[0.05] border border-white/10 text-xs text-neutral-100 rounded-md py-1.5 px-3 focus:outline-none focus:ring-1 focus:ring-[#45d99a] cursor-pointer"
                 >
                   <option value="">-- None --</option>
                   {profiles.map(name => (

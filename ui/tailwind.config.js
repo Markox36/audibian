@@ -10,14 +10,14 @@ export default {
       // behind by an older design and matched nothing in the app.
       colors: {
         mix: {
-          panel:  '#0a0a0a',
-          strip:  'rgba(255, 255, 255, 0.02)',
-          faint:  'rgba(255, 255, 255, 0.06)',
-          rail:   'rgba(255, 255, 255, 0.4)',
-          cream:  '#e8e6dd',
-          green:  '#3ecf8e',
-          'green-dim': 'rgba(62, 207, 142, 0.35)',
-          red:    '#ff5e62',
+          panel:  '#101013',
+          strip:  'rgba(255, 255, 255, 0.055)',
+          faint:  'rgba(255, 255, 255, 0.14)',
+          rail:   'rgba(255, 255, 255, 0.58)',
+          cream:  '#eceade',
+          green:  '#45d99a',
+          'green-dim': 'rgba(69, 217, 154, 0.35)',
+          red:    '#ff6b6e',
         },
       },
       fontFamily: {

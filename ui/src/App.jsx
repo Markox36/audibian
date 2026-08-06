@@ -129,17 +129,17 @@ export default function App() {
   ]
 
   return (
-    <div className="flex flex-col h-screen w-screen overflow-hidden font-sans bg-[#171717] text-[#f2f2f2] select-none">
+    <div className="flex flex-col h-screen w-screen overflow-hidden font-sans bg-[#101013] text-[#eceade] select-none">
       {!pwConnected && (
-        <div className="flex items-center justify-center gap-2 py-1.5 px-4 shrink-0 text-xs font-semibold uppercase tracking-wider bg-[#df4c55]/[0.12] border-b border-[#df4c55]/30 text-[#df4c55]">
-          <AlertCircle className="w-4 h-4 animate-pulse text-[#df4c55]" />
+        <div className="flex items-center justify-center gap-2 py-1.5 px-4 shrink-0 text-xs font-semibold uppercase tracking-wider bg-[#ff6b6e]/[0.12] border-b border-[#ff6b6e]/30 text-[#ff6b6e]">
+          <AlertCircle className="w-4 h-4 animate-pulse text-[#ff6b6e]" />
           <span>Pipewire Disconnected — Audio Graph Unavailable</span>
         </div>
       )}
 
       <header className="flex flex-wrap items-center justify-between gap-2 px-3 sm:px-4 py-1.5 shrink-0 min-h-11 border-b border-white/[0.08] bg-gradient-to-b from-white/[0.07] to-white/[0.02]">
         <div className="flex items-center gap-3 sm:gap-5 min-w-0 flex-wrap">
-          <span className="text-sm font-bold tracking-[0.12em] uppercase text-[#4169e1] shrink-0">
+          <span className="text-sm font-bold tracking-[0.12em] uppercase text-[#45d99a] shrink-0">
             Audibian
           </span>
 
@@ -150,8 +150,8 @@ export default function App() {
                 onClick={() => setActiveTab(t.id)}
                 className={`px-2 sm:px-3.5 py-1 rounded-md text-[10px] sm:text-xs font-semibold tracking-wider uppercase transition-all duration-150 outline-none shrink-0 ${
                   activeTab === t.id
-                    ? 'bg-[#4169e1] text-white shadow-[0_1px_3px_rgba(65,105,225,0.35)]'
-                    : 'bg-transparent text-[#7a7a7a] hover:text-neutral-200'
+                    ? 'bg-[#45d99a] text-black shadow-[0_1px_3px_rgba(69,217,154,0.35)]'
+                    : 'bg-transparent text-[#9a988c] hover:text-neutral-200'
                 }`}
               >
                 {t.label}
@@ -160,17 +160,17 @@ export default function App() {
           </nav>
         </div>
 
-        <div className="hidden sm:flex items-center gap-3 text-xs font-mono text-[#7a7a7a]">
+        <div className="hidden sm:flex items-center gap-3 text-xs font-mono text-[#9a988c]">
           <span>Tauri-Engine v2.0</span>
           <span className="h-3 w-px bg-white/[0.08] inline-block" />
-          <span className="flex items-center gap-1.5 text-[#38b868]">
-            <span className="h-1.5 w-1.5 rounded-full animate-pulse bg-[#38b868] inline-block" />
+          <span className="flex items-center gap-1.5 text-[#45d99a]">
+            <span className="h-1.5 w-1.5 rounded-full animate-pulse bg-[#45d99a] inline-block" />
             online
           </span>
         </div>
       </header>
 
-      <main className="flex-1 flex flex-col min-h-0 bg-[#171717]">
+      <main className="flex-1 flex flex-col min-h-0 bg-[#101013]">
         {activeTab === 'matrix' && (
           <Matrix
             graph={graph}

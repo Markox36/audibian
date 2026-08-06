@@ -76,7 +76,7 @@ function EqCurve({ bands }) {
     ctx.clearRect(0, 0, W, H)
 
     // Deep dark background
-    ctx.fillStyle = '#171717'
+    ctx.fillStyle = '#101013'
     ctx.fillRect(0, 0, W, H)
 
     // Grid lines (dB)
@@ -125,11 +125,11 @@ function EqCurve({ bands }) {
     ctx.lineTo(W, H / 2)
     ctx.lineTo(0, H / 2)
     ctx.closePath()
-    ctx.fillStyle = 'rgba(65, 105, 225, 0.08)'
+    ctx.fillStyle = 'rgba(69, 217, 154, 0.08)'
     ctx.fill()
 
     // Curve line (Orange theme)
-    ctx.strokeStyle = '#4169e1'
+    ctx.strokeStyle = '#45d99a'
     ctx.lineWidth = 2
     ctx.beginPath()
     for (let x = 0; x < W; x++) {
@@ -143,7 +143,7 @@ function EqCurve({ bands }) {
   }, [bands])
 
   return (
-    <div className="w-full border border-white/[0.08] bg-[#171717] rounded-lg overflow-hidden my-3">
+    <div className="w-full border border-white/[0.08] bg-[#101013] rounded-lg overflow-hidden my-3">
       <canvas ref={canvasRef} width={900} height={120} className="w-full h-32 block" />
     </div>
   )
@@ -156,8 +156,8 @@ function NsToggle({ active, onChange }) {
       role="switch"
       aria-checked={active}
       onClick={onChange}
-      className={`inline-flex h-5 w-9 shrink-0 cursor-pointer items-center rounded-full border-2 border-transparent transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-[#4169e1] ${
-        active ? 'bg-[#4169e1]' : 'bg-white/[0.06]'
+      className={`inline-flex h-5 w-9 shrink-0 cursor-pointer items-center rounded-full border-2 border-transparent transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-[#45d99a] ${
+        active ? 'bg-[#45d99a]' : 'bg-white/[0.06]'
       }`}
     >
       <span
@@ -215,14 +215,14 @@ export default function Effects({ graph }) {
   }
 
   return (
-    <div className="flex-1 overflow-auto bg-[#171717] p-6 flex flex-col gap-6 text-neutral-300 font-sans">
+    <div className="flex-1 overflow-auto bg-[#101013] p-6 flex flex-col gap-6 text-neutral-300 font-sans">
       <div className="max-w-4xl w-full mx-auto flex flex-col gap-6">
         
         {/* Equalizer Parametrico Card */}
         <div className="border border-white/[0.08] bg-white/[0.05] rounded-xl p-6 flex flex-col gap-4 shadow-lg">
           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-white/[0.08] pb-4">
             <div className="flex items-center gap-3">
-              <Sliders className="w-5 h-5 text-[#4169e1]" />
+              <Sliders className="w-5 h-5 text-[#45d99a]" />
               <h2 className="text-sm font-bold uppercase tracking-wider text-neutral-200">Parametric Equalizer</h2>
               {eqActive && (
                 <span className="bg-emerald-500/10 text-emerald-450 border border-emerald-500/20 px-2 py-0.5 rounded-full text-[9px] font-bold tracking-wider uppercase flex items-center gap-1">
@@ -237,7 +237,7 @@ export default function Effects({ graph }) {
               <select
                 value={targetSink}
                 onChange={e => setTargetSink(e.target.value)}
-                className="bg-white/[0.05] border border-white/10 text-xs text-neutral-100 rounded-md py-1.5 px-3 focus:outline-none focus:ring-1 focus:ring-[#4169e1] cursor-pointer"
+                className="bg-white/[0.05] border border-white/10 text-xs text-neutral-100 rounded-md py-1.5 px-3 focus:outline-none focus:ring-1 focus:ring-[#45d99a] cursor-pointer"
               >
                 <option value="">-- Select Sink --</option>
                 {sinkNodes.map(n => (
@@ -247,7 +247,7 @@ export default function Effects({ graph }) {
               <button 
                 onClick={applyEq} 
                 disabled={!targetSink}
-                className="inline-flex items-center bg-[#4169e1] hover:bg-[#5578e8] disabled:opacity-40 disabled:hover:bg-[#4169e1] text-black font-extrabold text-[10px] tracking-wider uppercase py-1.5 px-3.5 rounded-md transition-colors"
+                className="inline-flex items-center bg-[#45d99a] hover:bg-[#6fe0b3] disabled:opacity-40 disabled:hover:bg-[#45d99a] text-black font-extrabold text-[10px] tracking-wider uppercase py-1.5 px-3.5 rounded-md transition-colors"
               >
                 {eqActive ? 'Update' : 'Apply'}
               </button>
@@ -272,17 +272,17 @@ export default function Effects({ graph }) {
                 key={idx} 
                 className={`border rounded-lg p-3.5 flex flex-col gap-3.5 transition-all ${
                   band.enabled 
-                    ? 'border-white/[0.08] bg-[#171717]' 
+                    ? 'border-white/[0.08] bg-[#101013]' 
                     : 'border-white/[0.08] bg-white/[0.03] opacity-40 hover:opacity-60'
                 }`}
               >
                 <div className="flex items-center justify-between border-b border-white/[0.08] pb-2">
-                  <span className="text-[10px] font-extrabold uppercase tracking-wider text-[#4169e1]">{band.filter_type}</span>
+                  <span className="text-[10px] font-extrabold uppercase tracking-wider text-[#45d99a]">{band.filter_type}</span>
                   <button
                     onClick={() => updateBand(idx, 'enabled', !band.enabled)}
                     className={`text-[9px] font-bold tracking-wider uppercase py-0.5 px-2 rounded border transition-colors ${
                       band.enabled 
-                        ? 'bg-[#4169e1]/10 text-[#4169e1] border-[#4169e1]/20' 
+                        ? 'bg-[#45d99a]/10 text-[#45d99a] border-[#45d99a]/20' 
                         : 'bg-white/[0.05] text-neutral-500 border-white/[0.08]'
                     }`}
                   >
@@ -301,7 +301,7 @@ export default function Effects({ graph }) {
                     min="20"
                     max="20000"
                     onChange={e => updateBand(idx, 'frequency', parseFloat(e.target.value))}
-                    className="bg-white/[0.05] border border-white/[0.08] text-xs text-neutral-100 rounded-md py-1 px-2 w-full focus:outline-none focus:border-[#4169e1] text-center font-mono"
+                    className="bg-white/[0.05] border border-white/[0.08] text-xs text-neutral-100 rounded-md py-1 px-2 w-full focus:outline-none focus:border-[#45d99a] text-center font-mono"
                   />
                 </div>
 
@@ -317,7 +317,7 @@ export default function Effects({ graph }) {
                     step="0.5"
                     value={band.gain_db}
                     onChange={e => updateBand(idx, 'gain_db', parseFloat(e.target.value))}
-                    className="accent-[#4169e1] h-1.5 w-full bg-white/[0.05] rounded-lg appearance-none cursor-pointer"
+                    className="accent-[#45d99a] h-1.5 w-full bg-white/[0.05] rounded-lg appearance-none cursor-pointer"
                   />
                 </div>
 
@@ -333,7 +333,7 @@ export default function Effects({ graph }) {
                     max="10"
                     step="0.1"
                     onChange={e => updateBand(idx, 'q', parseFloat(e.target.value))}
-                    className="bg-white/[0.05] border border-white/[0.08] text-xs text-neutral-100 rounded-md py-1 px-2 w-full focus:outline-none focus:border-[#4169e1] text-center font-mono"
+                    className="bg-white/[0.05] border border-white/[0.08] text-xs text-neutral-100 rounded-md py-1 px-2 w-full focus:outline-none focus:border-[#45d99a] text-center font-mono"
                   />
                 </div>
               </div>
@@ -344,7 +344,7 @@ export default function Effects({ graph }) {
         {/* Noise Suppression Card */}
         <div className="border border-white/[0.08] bg-white/[0.05] rounded-xl p-6 flex flex-col gap-4 shadow-lg">
           <div className="flex items-center gap-3 border-b border-white/[0.08] pb-4">
-            <Waves className="w-5 h-5 text-[#4169e1]" />
+            <Waves className="w-5 h-5 text-[#45d99a]" />
             <h2 className="text-sm font-bold uppercase tracking-wider text-neutral-200">Noise Suppression</h2>
           </div>
 
@@ -368,7 +368,7 @@ export default function Effects({ graph }) {
 
                     <div className="flex items-center gap-3">
                       <span className={`text-[10px] font-bold tracking-wider uppercase font-mono ${
-                        active ? 'text-[#4169e1]' : 'text-neutral-500'
+                        active ? 'text-[#45d99a]' : 'text-neutral-500'
                       }`}>
                         {active ? 'Suppression On' : 'Suppression Off'}
                       </span>
