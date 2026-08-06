@@ -1,13 +1,13 @@
 # Maintainer: Markox36 <kenabotai@outlook.com>
 pkgname=audibian
-pkgver=0.1.0
+pkgver=0.2.0
 pkgrel=1
 pkgdesc="Audio manager for PipeWire — patchbay, mixer, EQ and profiles"
 arch=('x86_64')
 url="https://github.com/Markox36/audibian"
 license=('GPL3')
-depends=('pipewire' 'pipewire-pulse' 'webkit2gtk-4.1' 'gtk3' 'librsvg')
-makedepends=('cargo' 'pnpm' 'nodejs' 'pkgconf')
+depends=('pipewire' 'pipewire-pulse' 'webkit2gtk-4.1' 'gtk3' 'librsvg' 'alsa-lib')
+makedepends=('cargo' 'pnpm' 'nodejs' 'pkgconf' 'alsa-lib')
 source=("$pkgname-$pkgver.tar.gz::https://github.com/Markox36/audibian/archive/refs/tags/v$pkgver.tar.gz")
 sha256sums=('SKIP')
 

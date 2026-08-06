@@ -48,6 +48,7 @@ Tested on **Debian 13 (Trixie)** with PipeWire ≥ 1.2.
 | WebKitGTK dev headers | 4.1 | `libwebkit2gtk-4.1-dev` |
 | GTK 3 dev headers | — | `libgtk-3-dev` |
 | PipeWire dev headers | 1.2 | `libpipewire-0.3-dev`, `libspa-0.2-dev` |
+| ALSA dev headers (MIDI I/O) | — | `libasound2-dev` |
 | libclang (for bindgen) | — | `clang`, `libclang-dev` |
 | AppIndicator dev headers | — | `libayatana-appindicator3-dev` |
 | librsvg | — | `librsvg2-dev`, `librsvg2-bin` (icon generation) |
@@ -60,7 +61,7 @@ sudo apt install \
   build-essential pkg-config libssl-dev \
   libwebkit2gtk-4.1-dev libgtk-3-dev libayatana-appindicator3-dev \
   librsvg2-dev librsvg2-bin \
-  libpipewire-0.3-dev libspa-0.2-dev \
+  libpipewire-0.3-dev libspa-0.2-dev libasound2-dev \
   clang libclang-dev \
   nodejs npm && npm install -g pnpm
 ```
