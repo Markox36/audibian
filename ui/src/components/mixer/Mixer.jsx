@@ -23,7 +23,9 @@ export default function Mixer({ graph }) {
     global_scale: 1.0,
   })
   const [loading, setLoading] = useState(true)
-  const [peaks, setPeaks] = useState({})
+  // No peak state here on purpose: meter levels bypass React entirely and are
+  // written to the DOM by meterStore.js. Putting them in state re-rendered the
+  // whole mixer at display rate. See meterStore.js.
   const [faderValues, setFaderValues] = useState({})
   const [modal, setModal] = useState(null)
   const [newInputDialog, setNewInputDialog] = useState(null)
@@ -64,37 +66,12 @@ export default function Mixer({ graph }) {
     refreshLoadedMidi()
   }
 
-  const peakBufferRef = useRef({})
-  const peakDirtyRef = useRef(false)
-  const peakRafRef = useRef(0)
-
   useEffect(() => {
     loadConfig()
     const unsubs = []
-    listen('pw-node-peak', e => {
-      const { node_name, db, db_l, db_r } = e.payload
-      peakBufferRef.current[node_name] = {
-        db,
-        l: typeof db_l === 'number' ? db_l : db,
-        r: typeof db_r === 'number' ? db_r : db,
-      }
-      peakDirtyRef.current = true
-      if (!peakRafRef.current) {
-        peakRafRef.current = requestAnimationFrame(() => {
-          peakRafRef.current = 0
-          if (!peakDirtyRef.current) return
-          peakDirtyRef.current = false
-          setPeaks(prev => ({ ...prev, ...peakBufferRef.current }))
-          peakBufferRef.current = {}
-        })
-      }
-    }).then(u => unsubs.push(u))
     listen('pw-node-added', () => loadConfig()).then(u => unsubs.push(u))
     listen('pw-node-removed', () => loadConfig()).then(u => unsubs.push(u))
-    return () => {
-      unsubs.forEach(u => u())
-      if (peakRafRef.current) cancelAnimationFrame(peakRafRef.current)
-    }
+    return () => { unsubs.forEach(u => u()) }
   }, [])
 
   const sinkNodes = useMemo(() => graph.nodes.filter(n => n.media_class === 'Audio/Sink'), [graph.nodes])
@@ -217,9 +194,6 @@ export default function Mixer({ graph }) {
     )
   }
 
-  const masterPeak = peaks['audibian_master']
-  const mDb = typeof masterPeak === 'number' ? masterPeak : masterPeak?.db ?? -60
-
   return (
     <div className="flex-1 flex flex-col h-full overflow-hidden" style={{ backgroundColor: PANEL_BG, color: CREAM }}>
 
@@ -297,8 +271,6 @@ export default function Mixer({ graph }) {
           <HeaderRail />
 
           {sortedInputs.map(ch => {
-            const peak = peaks[ch.sink_name]
-            const peakDb = typeof peak === 'number' ? peak : peak?.db ?? -60
             return (
               <InputStrip
                 key={ch.id}
@@ -319,19 +291,17 @@ export default function Mixer({ graph }) {
                 isDragOverTarget={dragOverId === ch.id}
                 soloActive={soloSet.has(`in-${ch.id}`)}
                 onSoloToggle={handleSoloToggle}
-                dbL={peak?.l ?? peakDb}
-                dbR={peak?.r ?? peakDb}
               />
             )
           })}
 
           {sortedMidi.map(ch => {
-            const peak = peaks[ch.sink_name]
-            const peakDb = typeof peak === 'number' ? peak : peak?.db ?? -60
             return (
               <MidiStrip
                 key={ch.id}
                 ch={ch}
+                returnChannels={sortedReturns}
+                sends={config.sends}
                 loaded={loadedMidiIds.has(ch.id)}
                 selected={selectedMidiId === ch.id}
                 onSelect={() => setSelectedMidiId(sel => sel === ch.id ? null : ch.id)}
@@ -340,8 +310,6 @@ export default function Mixer({ graph }) {
                 onRemove={handleMidiRemove}
                 soloActive={soloSet.has(`midi-${ch.id}`)}
                 onSoloToggle={handleMidiSoloToggle}
-                dbL={peak?.l ?? peakDb}
-                dbR={peak?.r ?? peakDb}
               />
             )
           })}
@@ -374,8 +342,6 @@ export default function Mixer({ graph }) {
           </div>
 
           {sortedReturns.map((ret, idx) => {
-            const peak = peaks[ret.sink_name]
-            const peakDb = typeof peak === 'number' ? peak : peak?.db ?? -60
             return (
               <ReturnStrip
                 key={ret.id}
@@ -394,8 +360,6 @@ export default function Mixer({ graph }) {
                 soloActive={soloSet.has(`ret-${ret.id}`)}
                 onSoloToggle={handleSoloToggle}
                 letter={String.fromCharCode(65 + idx)}
-                dbL={peak?.l ?? peakDb}
-                dbR={peak?.r ?? peakDb}
               />
             )
           })}
@@ -407,8 +371,6 @@ export default function Mixer({ graph }) {
             sinkNodes={sinkNodes}
             faderVal={getFader('master')}
             setFader={setFader}
-            dbL={masterPeak?.l ?? mDb}
-            dbR={masterPeak?.r ?? mDb}
           />
         </div>
       </div>

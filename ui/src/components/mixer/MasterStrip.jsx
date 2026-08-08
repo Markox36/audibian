@@ -1,23 +1,28 @@
-import React, { useState, useEffect } from 'react'
+import React, { useState, useEffect, useRef } from 'react'
 import { invoke } from '@tauri-apps/api/core'
 import { CREAM, GREEN, GREEN_DIM, RAIL_TEXT, RED, faderToDb } from './theme'
 import { MeterFader } from './MeterFader'
+import { subscribeReadout } from './meterStore'
 import { PanKnob } from './PanKnob'
 import { StripFrame } from './StripShell'
 
 
+// The master strip always meters the `audibian_master` null-sink.
+const MASTER_NODE = 'audibian_master'
+
 const MasterStrip = React.memo(function MasterStrip({
   masterSink, masterMuted, masterPan, sinkNodes,
-  faderVal, setFader, dbL, dbR,
+  faderVal, setFader,
 }) {
   const accent = GREEN
   const [muted, setMuted] = useState(masterMuted)
   useEffect(() => { setMuted(masterMuted) }, [masterMuted])
 
-  const peakDbDisplay = Math.max(dbL ?? -60, dbR ?? -60)
-  const peakTxt = peakDbDisplay <= -59.5 ? '-inf' : peakDbDisplay.toFixed(1)
+  // Written directly by the meter store; see meterStore.js.
+  const readoutRef = useRef(null)
+  useEffect(() => subscribeReadout(MASTER_NODE, readoutRef.current), [])
+
   const faderTxt = faderToDb(faderVal)
-  const clipping = peakDbDisplay > -0.5
 
   return (
     <StripFrame accent={accent} editing dragClasses="">
@@ -72,13 +77,12 @@ const MasterStrip = React.memo(function MasterStrip({
           {faderTxt}
         </div>
         <div
+          ref={readoutRef}
           className="text-[8.5px] font-mono text-center flex items-center justify-center rounded-sm tabular-nums border border-white/[0.11]"
-          style={{
-            backgroundColor: clipping ? RED : 'rgba(0,0,0,0.25)',
-            color: clipping ? 'white' : GREEN,
-          }}
+          style={{ backgroundColor: 'rgba(0,0,0,0.25)', color: GREEN }}
+          title="Peak (L+R max)"
         >
-          {peakTxt}
+          -inf
         </div>
       </div>
 
@@ -90,8 +94,7 @@ const MasterStrip = React.memo(function MasterStrip({
             setFader('master', v)
             invoke('set_master_volume', { volume: v / 100 }).catch(console.error)
           }}
-          dbL={dbL}
-          dbR={dbR}
+          nodeName={MASTER_NODE}
         />
       </div>
 

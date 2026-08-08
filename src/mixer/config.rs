@@ -278,6 +278,15 @@ impl MixerConfig {
             .map(|s| s.level)
     }
 
+    /// Sink name for anything that can be a Send *source* — sends route
+    /// audio into a return channel from either an input strip or a MIDI
+    /// strip, so callers must not assume `input_channel_id` only ever
+    /// names an `InputChannel`.
+    pub fn send_source_sink_name(&self, id: u32) -> Option<String> {
+        self.input_channels.iter().find(|c| c.id == id).map(|c| c.sink_name.clone())
+            .or_else(|| self.midi_channels.iter().find(|c| c.id == id).map(|c| c.sink_name.clone()))
+    }
+
     pub fn default_input_channel(&self) -> Option<&InputChannel> {
         self.input_channels.iter().find(|c| c.is_default)
     }

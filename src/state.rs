@@ -34,8 +34,7 @@ pub struct AppState {
     /// Active per-strip EQ filter-chain processes. Key = strip_key.
     pub strip_eq_instances: Arc<Mutex<HashMap<String, StripEqInstance>>>,
     pub meter_handles: Arc<Mutex<HashMap<String, crate::meter::MeterHandle>>>,
-    pub meter_tx: async_channel::Sender<(String, f32, f32)>,
-    pub meter_rx: async_channel::Receiver<(String, f32, f32)>,
+    pub meter_tx: async_channel::Sender<crate::meter::MeterSample>,
     /// Soundboard: persisted list of uploaded sounds.
     pub soundboard_config: Arc<Mutex<SoundboardConfig>>,
     /// Currently playing `paplay` children, one per Play click. Reaped on

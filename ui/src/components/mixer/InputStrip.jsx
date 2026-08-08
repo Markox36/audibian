@@ -1,8 +1,9 @@
-import React, { useState, useEffect } from 'react'
+import React, { useState, useEffect, useRef } from 'react'
 import { invoke } from '@tauri-apps/api/core'
 import { Settings, Plus, X, GripVertical } from 'lucide-react'
 import { CREAM, FAINT, GREEN, GREEN_DIM, RAIL_TEXT, RED, autoColor, faderToDb } from './theme'
 import { MeterFader } from './MeterFader'
+import { subscribeReadout } from './meterStore'
 import { PanKnob } from './PanKnob'
 import { StripFrame } from './StripShell'
 
@@ -14,12 +15,20 @@ const InputStrip = React.memo(function InputStrip({
   onDragStart, onDragOver, onDragLeave, onDragEnd, onDrop,
   isDragging, isDragOverTarget,
   soloActive, onSoloToggle,
-  dbL, dbR,
 }) {
   const accent = ch.color || autoColor(ch.id)
   const faderKey = `in-${ch.id}`
   const [muted, setMuted] = useState(ch.muted)
   useEffect(() => { setMuted(ch.muted) }, [ch.muted])
+
+  // Peak text and clip colour are written straight to this node by the meter
+  // store — keeping them out of props is what stops a level change from
+  // re-rendering the strip. See meterStore.js.
+  const readoutRef = useRef(null)
+  useEffect(
+    () => subscribeReadout(ch.sink_name, readoutRef.current),
+    [ch.sink_name]
+  )
 
   const dragClasses = isDragging
     ? 'opacity-30'
@@ -27,10 +36,7 @@ const InputStrip = React.memo(function InputStrip({
     ? 'ring-1 ring-white/40'
     : ''
 
-  const peakDbDisplay = Math.max(dbL ?? -60, dbR ?? -60)
-  const peakTxt = peakDbDisplay <= -59.5 ? '-inf' : peakDbDisplay.toFixed(1)
   const faderTxt = faderToDb(faderVal)
-  const clipping = peakDbDisplay > -0.5
   const sourceLabel = (() => {
     if (!ch.source_name) return '—'
     const n = captureNodes.find(n => n.name === ch.source_name)
@@ -153,14 +159,12 @@ const InputStrip = React.memo(function InputStrip({
           {faderTxt}
         </div>
         <div
+          ref={readoutRef}
           className="text-[8.5px] font-mono text-center flex items-center justify-center rounded-sm tabular-nums border border-white/[0.11]"
-          style={{
-            backgroundColor: clipping ? RED : 'rgba(0,0,0,0.25)',
-            color: clipping ? 'white' : GREEN,
-          }}
+          style={{ backgroundColor: 'rgba(0,0,0,0.25)', color: GREEN }}
           title="Peak (L+R max)"
         >
-          {peakTxt}
+          -inf
         </div>
       </div>
 
@@ -172,8 +176,7 @@ const InputStrip = React.memo(function InputStrip({
             setFader(faderKey, v)
             invoke('set_strip_volume', { id: ch.id, isInput: true, volume: v / 100 }).catch(console.error)
           }}
-          dbL={dbL}
-          dbR={dbR}
+          nodeName={ch.sink_name}
         />
       </div>
 

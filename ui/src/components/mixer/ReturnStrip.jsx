@@ -1,8 +1,9 @@
-import React, { useState, useEffect } from 'react'
+import React, { useState, useEffect, useRef } from 'react'
 import { invoke } from '@tauri-apps/api/core'
 import { Settings, X, GripVertical } from 'lucide-react'
 import { CREAM, FAINT, GREEN, RAIL_TEXT, RED, autoColor, faderToDb } from './theme'
 import { MeterFader } from './MeterFader'
+import { subscribeReadout } from './meterStore'
 import { PanKnob } from './PanKnob'
 import { CellLabel, StripFrame } from './StripShell'
 
@@ -14,7 +15,6 @@ const ReturnStrip = React.memo(function ReturnStrip({
   onDragStart, onDragOver, onDragLeave, onDragEnd, onDrop,
   isDragging, isDragOverTarget,
   soloActive, onSoloToggle,
-  dbL, dbR,
   letter,
 }) {
   const accent = ret.color || autoColor(ret.id + 180)
@@ -22,11 +22,15 @@ const ReturnStrip = React.memo(function ReturnStrip({
   const [muted, setMuted] = useState(ret.muted)
   useEffect(() => { setMuted(ret.muted) }, [ret.muted])
 
+  // Written directly by the meter store; see meterStore.js.
+  const readoutRef = useRef(null)
+  useEffect(
+    () => subscribeReadout(ret.sink_name, readoutRef.current),
+    [ret.sink_name]
+  )
+
   const dragClasses = isDragging ? 'opacity-30' : isDragOverTarget ? 'ring-1 ring-white/40' : ''
-  const peakDbDisplay = Math.max(dbL ?? -60, dbR ?? -60)
-  const peakTxt = peakDbDisplay <= -59.5 ? '-inf' : peakDbDisplay.toFixed(1)
   const faderTxt = faderToDb(faderVal)
-  const clipping = peakDbDisplay > -0.5
 
   return (
     <StripFrame
@@ -99,13 +103,12 @@ const ReturnStrip = React.memo(function ReturnStrip({
           {faderTxt}
         </div>
         <div
+          ref={readoutRef}
           className="text-[8.5px] font-mono text-center flex items-center justify-center rounded-sm tabular-nums border border-white/[0.11]"
-          style={{
-            backgroundColor: clipping ? RED : 'rgba(0,0,0,0.25)',
-            color: clipping ? 'white' : GREEN,
-          }}
+          style={{ backgroundColor: 'rgba(0,0,0,0.25)', color: GREEN }}
+          title="Peak (L+R max)"
         >
-          {peakTxt}
+          -inf
         </div>
       </div>
 
@@ -117,8 +120,7 @@ const ReturnStrip = React.memo(function ReturnStrip({
             setFader(faderKey, v)
             invoke('set_strip_volume', { id: ret.id, isInput: false, volume: v / 100 }).catch(console.error)
           }}
-          dbL={dbL}
-          dbR={dbR}
+          nodeName={ret.sink_name}
         />
       </div>
 

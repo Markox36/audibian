@@ -71,8 +71,10 @@ fn main() {
             let (pw_event_tx, pw_event_rx) = async_channel::unbounded::<PwEvent>();
             let pw = Arc::new(PwThread::spawn(pw_event_tx));
 
-            // Meter channel
-            let (meter_tx, meter_rx) = async_channel::unbounded::<(String, f32, f32)>();
+            // Meter channel. Bounded on purpose: the producers are PipeWire RT
+            // threads using `try_send`, so a stalled UI drops meter frames
+            // instead of growing an unbounded queue until memory runs out.
+            let (meter_tx, meter_rx) = async_channel::bounded::<meter::MeterSample>(512);
             let meter_handles = Arc::new(Mutex::new(HashMap::<String, meter::MeterHandle>::new()));
 
             // Re-apply low-latency PipeWire drop-in if user enabled it last session.
@@ -142,7 +144,6 @@ fn main() {
                 strip_eq_instances,
                 meter_handles,
                 meter_tx,
-                meter_rx: meter_rx.clone(),
                 soundboard_config: Arc::new(Mutex::new(soundboard_cfg)),
                 soundboard_procs: Arc::new(Mutex::new(Vec::new())),
                 midi_plugin_hosts,
@@ -171,18 +172,45 @@ fn main() {
                 }
             }
 
-            // Bridge: meter peaks → emit pw-node-peak events
+            // Bridge: meter peaks → one batched `pw-node-peaks` event per frame.
+            //
+            // Previously this emitted one event per meter per PipeWire quantum:
+            // ~9 sinks × 47-187 Hz, each building a `serde_json::Value` tree and
+            // crossing the IPC boundary on its own. Coalescing into a single
+            // array per frame collapses that to 25 messages/s total, and the
+            // blocking `recv` means a silent machine costs zero wakeups.
+            //
+            // A plain thread, not an async task: it needs a periodic sleep and
+            // the async runtime here has no timer API exposed.
             let app_handle_meter = app.handle().clone();
-            tauri::async_runtime::spawn(async move {
-                while let Ok((node_name, db_l, db_r)) = meter_rx.recv().await {
-                    app_handle_meter.emit("pw-node-peak", serde_json::json!({
-                        "node_name": node_name,
-                        "db": ((db_l + db_r) * 0.5),
-                        "db_l": db_l,
-                        "db_r": db_r,
-                    })).ok();
-                }
-            });
+            std::thread::Builder::new()
+                .name("meter-bridge".into())
+                .spawn(move || {
+                    const FRAME: std::time::Duration = std::time::Duration::from_millis(40);
+                    let mut pending: HashMap<Arc<str>, (f32, f32)> = HashMap::new();
+
+                    loop {
+                        // Blocks while everything is silent — no polling.
+                        let Ok((key, l, r)) = meter_rx.recv_blocking() else { break };
+                        pending.insert(key, (l, r));
+
+                        // Let the rest of the meters land in the same frame.
+                        std::thread::sleep(FRAME);
+                        while let Ok((key, l, r)) = meter_rx.try_recv() {
+                            pending.insert(key, (l, r));
+                        }
+
+                        // Borrows `pending`; the borrow ends at the emit, which is
+                        // why this cannot be hoisted out of the loop and reused.
+                        let batch: Vec<(&str, f32, f32)> = pending
+                            .iter()
+                            .map(|(k, (l, r))| (k.as_ref(), *l, *r))
+                            .collect();
+                        app_handle_meter.emit("pw-node-peaks", &batch).ok();
+                        pending.clear();
+                    }
+                })
+                .ok();
 
             // Bridge: PW events → update Arc<Mutex<AudioGraph>> + emit Tauri events
             let app_handle = app.handle().clone();
@@ -391,7 +419,7 @@ fn handle_pw_event(event: PwEvent, graph: &Arc<Mutex<AudioGraph>>, app: &tauri::
                     let mut handles = state.meter_handles.lock().unwrap();
                     if !handles.contains_key(&key) {
                         if let Some(handle) = crate::meter::spawn_meter(
-                            node.id, key.clone(), state.meter_tx.clone(),
+                            node.id, Arc::from(key.as_str()), state.meter_tx.clone(),
                         ) {
                             handles.insert(key, handle);
                         }

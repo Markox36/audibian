@@ -81,15 +81,15 @@ pub fn apply_persistent_state(cfg: &MixerConfig) -> RestoredModules {
     std::thread::sleep(std::time::Duration::from_millis(500));
 
     for s in &cfg.sends {
-        let inp = cfg.input_channels.iter().find(|c| c.id == s.input_channel_id);
+        let src_sink = cfg.send_source_sink_name(s.input_channel_id);
         let ret = cfg.return_channels.iter().find(|r| r.id == s.return_channel_id);
-        if let (Some(inp), Some(ret)) = (inp, ret) {
-            let monitor = format!("{}.monitor", inp.sink_name);
+        if let (Some(src_sink), Some(ret)) = (src_sink, ret) {
+            let monitor = format!("{}.monitor", src_sink);
             if let Some(mid) = commands::create_loopback(&monitor, &ret.sink_name) {
                 if (s.level - 1.0).abs() > f32::EPSILON {
                     commands::set_loopback_volume(mid, s.level);
                 }
-                out.send_module_ids.insert((inp.id, ret.id), mid);
+                out.send_module_ids.insert((s.input_channel_id, ret.id), mid);
             }
         }
     }

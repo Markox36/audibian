@@ -2,6 +2,7 @@ use std::sync::{
     Arc,
     atomic::{AtomicBool, Ordering},
 };
+use std::time::{Duration, Instant};
 use log::debug;
 use pipewire::{
     context::ContextRc,
@@ -18,6 +19,27 @@ use spa::{
     utils::Direction,
 };
 
+/// One metering update: node key, dB left, dB right.
+///
+/// The key is an `Arc<str>` and not a `String` on purpose — the RT process
+/// callback clones it on every send, and a `String` clone is a heap
+/// allocation inside the audio thread. An `Arc` clone is a refcount bump.
+pub type MeterSample = (Arc<str>, f32, f32);
+
+/// Level floor. Anything quieter reads as silence.
+const DB_FLOOR: f32 = -60.0;
+
+/// Minimum spacing between two sends for the same meter (~25 Hz). A level
+/// meter is a visual aid; sending at the PipeWire quantum rate (47-187 Hz
+/// depending on buffer size) costs an IPC round trip per frame per strip and
+/// buys nothing the eye can resolve. Peaks between sends are held, not lost.
+const SEND_INTERVAL: Duration = Duration::from_millis(40);
+
+/// Suppress a send when neither channel moved this much since the last one.
+/// A steady tone or silence therefore costs zero events. Error stays bounded
+/// by this value because the comparison is against the last *sent* level.
+const DEAD_BAND_DB: f32 = 0.5;
+
 pub struct MeterHandle {
     stop: Arc<AtomicBool>,
     _thread: std::thread::JoinHandle<()>,
@@ -32,21 +54,29 @@ impl Drop for MeterHandle {
 
 struct UserData {
     format: AudioInfoRaw,
-    tx: async_channel::Sender<(String, f32, f32)>,
-    event_key: String,
+    tx: async_channel::Sender<MeterSample>,
+    key: Arc<str>,
     stop: Arc<AtomicBool>,
     main_loop: MainLoopRc,
+    /// Highest RMS seen since the last send, so rate limiting never swallows
+    /// a transient — the meter reports the loudest thing in the window.
+    hold_l: f32,
+    hold_r: f32,
+    /// Last values actually sent, for the dead-band comparison.
+    last_l: f32,
+    last_r: f32,
+    last_send: Instant,
 }
 
 /// Spawn a native PipeWire capture stream for metering.
 /// `target_id` — PipeWire node id to connect to (deterministic; avoids
 ///               wireplumber falling back to the default capture device when
 ///               a target name lookup races node creation).
-/// `event_key` — key emitted with pw-node-peak events
+/// `event_key` — key emitted with pw-node-peaks batches
 pub fn spawn_meter(
     target_id: u32,
-    event_key: String,
-    tx: async_channel::Sender<(String, f32, f32)>,
+    event_key: Arc<str>,
+    tx: async_channel::Sender<MeterSample>,
 ) -> Option<MeterHandle> {
     let stop = Arc::new(AtomicBool::new(false));
     let stop_clone = stop.clone();
@@ -61,8 +91,8 @@ pub fn spawn_meter(
 
 fn run_meter(
     target_id: u32,
-    event_key: String,
-    tx: async_channel::Sender<(String, f32, f32)>,
+    event_key: Arc<str>,
+    tx: async_channel::Sender<MeterSample>,
     stop: Arc<AtomicBool>,
 ) {
     let main_loop = match MainLoopRc::new(None) {
@@ -103,9 +133,16 @@ fn run_meter(
     let user_data = UserData {
         format: Default::default(),
         tx,
-        event_key: event_key.clone(),
+        key: event_key.clone(),
         stop,
         main_loop: main_loop.clone(),
+        hold_l: 0.0,
+        hold_r: 0.0,
+        // Seeded below the floor so the very first computed level always
+        // clears the dead band and the bar leaves -inf immediately.
+        last_l: f32::NEG_INFINITY,
+        last_r: f32::NEG_INFINITY,
+        last_send: Instant::now(),
     };
 
     let _listener = stream
@@ -148,36 +185,71 @@ fn run_meter(
                 let frames = n_samples / channels;
                 if frames == 0 { return; }
 
+                // No per-sample `is_finite` branch: a NaN or Inf in the stream
+                // poisons the accumulator, which is caught once after the loop.
+                // That keeps the inner loop branch-free so it stays vectorisable.
                 let mut sum_sq_l = 0.0_f32;
                 let mut sum_sq_r = 0.0_f32;
-                for frame in audio.chunks_exact(4 * channels) {
-                    let l_bytes = &frame[0..4];
-                    let v_l = f32::from_le_bytes([l_bytes[0], l_bytes[1], l_bytes[2], l_bytes[3]]);
-                    if v_l.is_finite() { sum_sq_l += v_l * v_l; }
-
-                    if channels >= 2 {
-                        let r_bytes = &frame[4..8];
-                        let v_r = f32::from_le_bytes([r_bytes[0], r_bytes[1], r_bytes[2], r_bytes[3]]);
-                        if v_r.is_finite() { sum_sq_r += v_r * v_r; }
+                if channels >= 2 {
+                    for frame in audio.chunks_exact(4 * channels) {
+                        let v_l = f32::from_le_bytes([frame[0], frame[1], frame[2], frame[3]]);
+                        let v_r = f32::from_le_bytes([frame[4], frame[5], frame[6], frame[7]]);
+                        sum_sq_l += v_l * v_l;
+                        sum_sq_r += v_r * v_r;
                     }
+                } else {
+                    for frame in audio.chunks_exact(4) {
+                        let v = f32::from_le_bytes([frame[0], frame[1], frame[2], frame[3]]);
+                        sum_sq_l += v * v;
+                    }
+                    sum_sq_r = sum_sq_l;
                 }
+                if !sum_sq_l.is_finite() || !sum_sq_r.is_finite() { return; }
+
                 let f = frames as f32;
-                let r_l = (sum_sq_l / f).sqrt();
-                let r_r = if channels >= 2 { (sum_sq_r / f).sqrt() } else { r_l };
-                (r_l, r_r)
+                ((sum_sq_l / f).sqrt(), (sum_sq_r / f).sqrt())
             } else {
                 return;
             };
 
-            let to_db = |rms: f32| if rms > 1e-9 {
-                (20.0_f32 * rms.log10()).clamp(-60.0, 0.0)
-            } else {
-                -60.0
-            };
-            let db_l = to_db(rms_l);
-            let db_r = to_db(rms_r);
+            // Hold the loudest level seen since the last send so rate limiting
+            // reports peaks rather than whatever happened to land on the tick.
+            ud.hold_l = ud.hold_l.max(rms_l);
+            ud.hold_r = ud.hold_r.max(rms_r);
 
-            if ud.tx.send_blocking((ud.event_key.clone(), db_l, db_r)).is_err() {
+            let now = Instant::now();
+            if now.duration_since(ud.last_send) < SEND_INTERVAL {
+                return;
+            }
+            ud.last_send = now;
+
+            let to_db = |rms: f32| if rms > 1e-9 {
+                (20.0_f32 * rms.log10()).clamp(DB_FLOOR, 0.0)
+            } else {
+                DB_FLOOR
+            };
+            let db_l = to_db(ud.hold_l);
+            let db_r = to_db(ud.hold_r);
+            ud.hold_l = 0.0;
+            ud.hold_r = 0.0;
+
+            // Silence and steady levels cost nothing past this point.
+            if (db_l - ud.last_l).abs() < DEAD_BAND_DB
+                && (db_r - ud.last_r).abs() < DEAD_BAND_DB
+            {
+                return;
+            }
+            ud.last_l = db_l;
+            ud.last_r = db_r;
+
+            // NEVER block here: this runs on the PipeWire RT thread (the stream
+            // is connected with RT_PROCESS). `send_blocking` on a full queue
+            // would stall the audio graph and produce xruns; the previous
+            // unbounded queue instead grew without limit when the UI stalled.
+            // Dropping a meter frame under backpressure is invisible.
+            if let Err(async_channel::TrySendError::Closed(_)) =
+                ud.tx.try_send((ud.key.clone(), db_l, db_r))
+            {
                 ud.main_loop.quit();
             }
         })

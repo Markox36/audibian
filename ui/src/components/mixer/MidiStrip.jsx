@@ -1,34 +1,38 @@
-import React, { useState, useEffect } from 'react'
+import React, { useState, useEffect, useRef } from 'react'
 import { invoke } from '@tauri-apps/api/core'
-import { X, Sparkles } from 'lucide-react'
-import { CREAM, FAINT, GREEN, RAIL_TEXT, RED, autoColor, faderToDb } from './theme'
+import { Plus, X, Sparkles } from 'lucide-react'
+import { CREAM, FAINT, GREEN, GREEN_DIM, RAIL_TEXT, RED, autoColor, faderToDb } from './theme'
 import { MeterFader } from './MeterFader'
+import { subscribeReadout } from './meterStore'
 import { PanKnob } from './PanKnob'
 import { StripFrame } from './StripShell'
 
 
-// MIDI/plugin channel strip. Same shape as ReturnStrip (no sends, no
-// source select) plus a clickable plugin badge that opens the shared
-// device footer at the bottom of the Mixer — same interaction as clicking
-// a track in Ableton Live's Session/Arrangement view to show its device
-// chain below.
+// MIDI/plugin channel strip. Same shape as InputStrip minus the source
+// select (has Sends to return channels, same as an input strip) plus a
+// clickable plugin badge that opens the shared device footer at the bottom
+// of the Mixer — same interaction as clicking a track in Ableton Live's
+// Session/Arrangement view to show its device chain below.
 const MidiStrip = React.memo(function MidiStrip({
-  ch, loaded, selected, onSelect,
+  ch, returnChannels, sends, loaded, selected, onSelect,
   faderVal, setFader,
   onRemove,
   soloActive, onSoloToggle,
-  dbL, dbR,
 }) {
   const accent = ch.color || autoColor(ch.id + 90)
   const faderKey = `midi-${ch.id}`
   const [muted, setMuted] = useState(ch.muted)
   useEffect(() => { setMuted(ch.muted) }, [ch.muted])
 
+  // Written directly by the meter store; see meterStore.js.
+  const readoutRef = useRef(null)
+  useEffect(
+    () => subscribeReadout(ch.sink_name, readoutRef.current),
+    [ch.sink_name]
+  )
+
   const plugin = ch.plugins?.[0]
-  const peakDbDisplay = Math.max(dbL ?? -60, dbR ?? -60)
-  const peakTxt = peakDbDisplay <= -59.5 ? '-inf' : peakDbDisplay.toFixed(1)
   const faderTxt = faderToDb(faderVal)
-  const clipping = peakDbDisplay > -0.5
 
   return (
     <StripFrame accent={accent} editing={selected} dragClasses="">
@@ -48,28 +52,64 @@ const MidiStrip = React.memo(function MidiStrip({
         />
       </div>
 
-      {/* Row 2 — Plugin badge, click opens the device footer */}
+      {/* Row 2 — Sends */}
+      <div
+        className="flex flex-col items-center justify-center gap-1 px-1 py-1 h-full w-full bg-white/[0.05] border border-white/[0.11] rounded-sm"
+      >
+        {returnChannels.length === 0 ? (
+          <button
+            className="w-6 h-6 rounded-sm flex items-center justify-center"
+            style={{ color: RAIL_TEXT, border: `1px dashed ${FAINT}` }}
+            title="No returns"
+            disabled
+          >
+            <Plus className="w-3 h-3" />
+          </button>
+        ) : (
+          returnChannels.slice().sort((a, b) => a.order - b.order).map((ret, idx) => {
+            const letter = String.fromCharCode(65 + idx)
+            const active = sends.some(s => s.input_channel_id === ch.id && s.return_channel_id === ret.id)
+            return (
+              <button
+                key={ret.id}
+                onClick={() => invoke('toggle_send', { inputId: ch.id, returnId: ret.id, active: !active }).catch(console.error)}
+                title={`Send to ${ret.name}`}
+                className="w-full text-[8px] font-bold tracking-wider uppercase py-0.5 rounded-sm transition-all"
+                style={{
+                  backgroundColor: active ? `${GREEN}22` : 'transparent',
+                  color: active ? GREEN : RAIL_TEXT,
+                  border: `1px solid ${active ? GREEN_DIM : FAINT}`,
+                }}
+              >
+                {letter}
+              </button>
+            )
+          })
+        )}
+      </div>
+
+      {/* Row 3 — Plugin badge + load state, click opens the device footer */}
       <button
         onClick={onSelect}
-        className="flex items-center justify-center gap-1 h-full w-full px-1 bg-white/[0.05] border border-white/[0.11] rounded-sm transition-colors hover:bg-white/[0.08]"
+        className="flex items-center justify-between gap-1 h-full w-full px-1 bg-white/[0.05] border border-white/[0.11] rounded-sm transition-colors hover:bg-white/[0.08]"
         title={plugin ? plugin.name : 'Add a plugin'}
       >
-        <Sparkles className="w-3 h-3 shrink-0" style={{ color: plugin ? accent : RAIL_TEXT }} />
+        <span className="flex items-center gap-1 min-w-0">
+          <Sparkles className="w-3 h-3 shrink-0" style={{ color: plugin ? accent : RAIL_TEXT }} />
+          <span
+            className="text-[9px] font-semibold truncate"
+            style={{ color: plugin ? CREAM : RAIL_TEXT }}
+          >
+            {plugin ? plugin.name : 'Add Plugin'}
+          </span>
+        </span>
         <span
-          className="text-[9px] font-semibold truncate"
-          style={{ color: plugin ? CREAM : RAIL_TEXT }}
+          className="text-[8px] font-bold uppercase tracking-wider shrink-0"
+          style={{ color: loaded ? GREEN : RAIL_TEXT }}
         >
-          {plugin ? plugin.name : 'Add Plugin'}
+          {loaded ? '● Live' : plugin ? '○ Idle' : '—'}
         </span>
       </button>
-
-      {/* Row 3 — Load state */}
-      <div
-        className="flex items-center justify-center h-full w-full text-[8px] font-bold uppercase tracking-wider bg-white/[0.05] border border-white/[0.11] rounded-sm"
-        style={{ color: loaded ? GREEN : RAIL_TEXT }}
-      >
-        {loaded ? '● Live' : plugin ? '○ Idle' : '—'}
-      </div>
 
       {/* Row 4 — Pan */}
       <div className="w-full h-full flex items-center justify-center bg-white/[0.05] border border-white/[0.11] rounded-sm py-1">
@@ -92,13 +132,12 @@ const MidiStrip = React.memo(function MidiStrip({
           {faderTxt}
         </div>
         <div
+          ref={readoutRef}
           className="text-[8.5px] font-mono text-center flex items-center justify-center rounded-sm tabular-nums border border-white/[0.11]"
-          style={{
-            backgroundColor: clipping ? RED : 'rgba(0,0,0,0.25)',
-            color: clipping ? 'white' : GREEN,
-          }}
+          style={{ backgroundColor: 'rgba(0,0,0,0.25)', color: GREEN }}
+          title="Peak (L+R max)"
         >
-          {peakTxt}
+          -inf
         </div>
       </div>
 
@@ -110,8 +149,7 @@ const MidiStrip = React.memo(function MidiStrip({
             setFader(faderKey, v)
             invoke('midi_channel_set_volume', { id: ch.id, volume: v / 100 }).catch(console.error)
           }}
-          dbL={dbL}
-          dbR={dbR}
+          nodeName={ch.sink_name}
         />
       </div>
 

@@ -164,7 +164,11 @@ export default function App() {
           <span>Tauri-Engine v2.0</span>
           <span className="h-3 w-px bg-white/[0.08] inline-block" />
           <span className="flex items-center gap-1.5 text-[#45d99a]">
-            <span className="h-1.5 w-1.5 rounded-full animate-pulse bg-[#45d99a] inline-block" />
+            {/* Static, not `animate-pulse`: the app forces
+                WEBKIT_DISABLE_COMPOSITING_MODE, so every frame of a CSS
+                animation is a software repaint. An infinitely pulsing
+                decorative dot costs real CPU for as long as the app is open. */}
+            <span className="h-1.5 w-1.5 rounded-full bg-[#45d99a] inline-block" />
             online
           </span>
         </div>

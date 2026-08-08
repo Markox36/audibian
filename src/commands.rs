@@ -428,9 +428,7 @@ pub fn update_return_channel_name(state: State<AppState>, id: u32, name: String)
 pub fn toggle_send(state: State<AppState>, input_id: u32, return_id: u32, active: bool) {
     let (input_sink, ret_sink) = {
         let mut cfg = state.mixer_config.lock().unwrap();
-        let input_sink = cfg.input_channels.iter()
-            .find(|c| c.id == input_id)
-            .map(|c| c.sink_name.clone());
+        let input_sink = cfg.send_source_sink_name(input_id);
         let ret_sink = cfg.return_channels.iter()
             .find(|r| r.id == return_id)
             .map(|r| r.sink_name.clone());
@@ -2141,11 +2139,26 @@ pub fn midi_channel_remove(state: State<AppState>, id: u32) {
         handle.stop();
     }
 
+    // Unload all send loopbacks where this channel is the source — mirrors
+    // remove_input_channel; MIDI channels are a Send source too.
+    {
+        let mut send_mods = state.send_module_ids.lock().unwrap();
+        let keys: Vec<(u32, u32)> = send_mods.keys().filter(|(inp, _)| *inp == id).cloned().collect();
+        for key in keys {
+            if let Some(mid) = send_mods.remove(&key) {
+                std::process::Command::new("pactl")
+                    .args(["unload-module", &mid.to_string()])
+                    .spawn_detached();
+            }
+        }
+    }
+
     let sink_name = {
         let mut cfg = state.mixer_config.lock().unwrap();
         let removed = cfg.midi_channels.iter()
             .find(|c| c.id == id)
             .map(|c| c.sink_name.clone());
+        cfg.sends.retain(|s| s.input_channel_id != id);
         cfg.midi_channels.retain(|c| c.id != id);
         cfg.save();
         removed

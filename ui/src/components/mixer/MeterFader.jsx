@@ -1,5 +1,6 @@
-import React, { useRef } from 'react'
+import React, { useEffect, useRef } from 'react'
 import { CREAM, DB_TICKS, GREEN, RAIL_TEXT, RED } from './theme'
+import { subscribeBars } from './meterStore'
 
 // Volume fader and level meters, side by side.
 //
@@ -14,23 +15,35 @@ import { CREAM, DB_TICKS, GREEN, RAIL_TEXT, RED } from './theme'
 //   └────┴─────┴──────┘
 
 const FADER_MIN = 0
-const FADER_MAX = 150
+// Every strip's backend command (`set_strip_volume`, `midi_channel_set_volume`,
+// `set_master_volume`) clamps the fader to [0.0, 4.0] and pushes it straight to
+// `pactl set-sink-volume <fader*100>%`. The UI used to cap requests at 150 (only
+// +10.6dB of real boost, see theme.js `faderToDb`), silently leaving most of that
+// backend range unreachable — the actual blocker for a quiet VST instrument on a
+// MIDI channel, whose output level nothing else in the chain compensates for.
+// 400 matches the backend ceiling exactly (fader = value/100 = 4.0 at the top).
+const FADER_MAX = 400
 const FADER_UNITY = 100
 
 // Cap height, and the travel padding that keeps it inside the slot at either end.
 const CAP_H = 16
 const TRAVEL_PAD = 4
 
-function MeterFader({ value, onChange, dbL, dbR }) {
+// `nodeName` is the PipeWire sink the bars follow. Levels are NOT props: the
+// meter store writes the two bar elements directly, so a level change costs
+// two style writes instead of a React render of this strip. See meterStore.js.
+function MeterFader({ value, onChange, nodeName }) {
   const containerRef = useRef(null)
+  const barLRef = useRef(null)
+  const barRRef = useRef(null)
+
+  useEffect(
+    () => subscribeBars(nodeName, barLRef.current, barRRef.current),
+    [nodeName]
+  )
 
   const pct = Math.min(1, Math.max(0, (value - FADER_MIN) / (FADER_MAX - FADER_MIN)))
   const unityPct = (FADER_UNITY - FADER_MIN) / (FADER_MAX - FADER_MIN)
-
-  const dbMin = -60
-  const dbMax = 0
-  const lPct = Math.max(0, Math.min(100, ((dbL - dbMin) / (dbMax - dbMin)) * 100))
-  const rPct = Math.max(0, Math.min(100, ((dbR - dbMin) / (dbMax - dbMin)) * 100))
 
   const startDrag = (e) => {
     e.preventDefault()
@@ -52,14 +65,17 @@ function MeterFader({ value, onChange, dbL, dbR }) {
     window.addEventListener('mouseup', onUp)
   }
 
-  const meterFill = (fillPct) => (
+  // The fill is a full-height element scaled from its bottom edge. Animating
+  // `transform` stays on the compositor; the previous `height` + height
+  // transition forced a layout pass for every bar on every frame.
+  const meterFill = (ref) => (
     <div className="relative flex-1 min-w-0 max-w-[13px] rounded-[1px] border border-white/[0.07] bg-black/70 overflow-hidden">
       <div
-        className="absolute inset-x-0 bottom-0"
+        ref={ref}
+        className="absolute inset-0 origin-bottom will-change-transform"
         style={{
-          height: `${fillPct}%`,
+          transform: 'scaleY(0)',
           background: `linear-gradient(to top, ${GREEN} 0%, ${GREEN} 78%, ${RED} 100%)`,
-          transition: 'height 60ms linear',
         }}
       />
     </div>
@@ -84,8 +100,8 @@ function MeterFader({ value, onChange, dbL, dbR }) {
 
       {/* Stereo meters */}
       <div className="flex flex-1 min-w-0 justify-center gap-[3px]">
-        {meterFill(lPct)}
-        {meterFill(rPct)}
+        {meterFill(barLRef)}
+        {meterFill(barRRef)}
       </div>
 
       {/* Fader lane */}

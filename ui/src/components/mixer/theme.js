@@ -61,16 +61,20 @@ export const RAIL_WIDTH  = 'clamp(58px, 5vw, 78px)'
 
 export const DB_TICKS = [0, 6, 12, 18, 24, 30, 36, 42, 48, 54]
 
+// PipeWire null-sinks report HARDWARE|DECIBEL_VOLUME and apply a cubic
+// (not linear) volume law: requesting `pactl set-sink-volume N%` yields a
+// real amplitude gain of (N/100)^3, i.e. dB = 60*log10(N/100). Verified
+// empirically against a probe null-sink (50% → -18.06dB, 150% → +10.57dB,
+// 300% → +28.63dB — all match this formula, not the naive 20*log10(N/100)
+// this used to compute). Getting this right matters: it's the only readout
+// telling the user how much gain a strip (e.g. a quiet VST instrument on a
+// MIDI channel) is actually getting.
 export function faderToDb(val) {
   const v = parseFloat(val)
-  if (v === 0) return '-inf'
+  if (v <= 0) return '-inf'
   if (v === 100) return '0.0'
-  if (v > 100) {
-    const db = ((v - 100) / 50) * 6
-    return `+${db.toFixed(1)}`
-  }
-  const db = 20 * Math.log10(v / 100)
-  return `${db.toFixed(1)}`
+  const db = 60 * Math.log10(v / 100)
+  return db > 0 ? `+${db.toFixed(1)}` : db.toFixed(1)
 }
 
 export const DESIGNER_COLORS = [
