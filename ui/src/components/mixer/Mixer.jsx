@@ -1,8 +1,8 @@
 import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react'
 import { invoke } from '@tauri-apps/api/core'
 import { listen } from '@tauri-apps/api/event'
-import { Plus, Sparkles, X, Activity } from 'lucide-react'
-import { CREAM, FAINT, GREEN, GRID_MAX_HEIGHT, GRID_TEMPLATE, PANEL_BG, RAIL_TEXT, RAIL_WIDTH, STRIP_BG, STRIP_WIDTH } from './theme'
+import { Plus, Sparkles, X, Activity, ArrowRight, ArrowDown } from 'lucide-react'
+import { CREAM, FAINT, GREEN, GREEN_DIM, GRID_MAX_HEIGHT, PANEL_BG, RAIL_TEXT, RAIL_WIDTH, STRIP_BG, STRIP_WIDTH, gridTemplate, sendsRowHeight } from './theme'
 import { ConfigModal } from './ConfigModal'
 import { HeaderRail } from './HeaderRail'
 import { InputStrip } from './InputStrip'
@@ -11,6 +11,37 @@ import { MidiStrip } from './MidiStrip'
 import { PluginFooter } from './PluginFooter'
 import { ReturnStrip } from './ReturnStrip'
 
+const LANE_H = 28
+
+// Bordered block of the flow: caption + a strip grid with the shared rows.
+function FlowBlock({ title, caption, template, columns, accent, style, className = '', children }) {
+  return (
+    <section
+      className={`flex flex-col min-h-0 rounded-xl border bg-white/[0.02] ${className}`}
+      style={{ borderColor: accent ? GREEN_DIM : 'rgba(255,255,255,0.08)', ...style }}
+    >
+      <header className="flex items-baseline gap-2 px-3 pt-2 pb-1 shrink-0 select-none">
+        <span className="text-[10px] font-black uppercase tracking-[0.2em]" style={{ color: accent ? GREEN : CREAM }}>{title}</span>
+        <span className="text-[8px] uppercase tracking-wider" style={{ color: RAIL_TEXT }}>{caption}</span>
+      </header>
+      <div
+        className="flex-1 min-h-0"
+        style={{
+          display: 'grid',
+          gridTemplateRows: template,
+          gridAutoFlow: 'column',
+          gridTemplateColumns: columns,
+          alignContent: 'start',
+          padding: '0.25em 0.75em 0.75em 0.75em',
+          rowGap: 4,
+          columnGap: 8,
+        }}
+      >
+        {children}
+      </div>
+    </section>
+  )
+}
 
 export default function Mixer({ graph }) {
   const [config, setConfig] = useState({
@@ -210,6 +241,10 @@ export default function Mixer({ graph }) {
   const sortedInputs = useMemo(() => config.input_channels.slice().sort((a, b) => a.order - b.order), [config.input_channels])
   const sortedReturns = useMemo(() => config.return_channels.slice().sort((a, b) => a.order - b.order), [config.return_channels])
   const sortedMidi = useMemo(() => (config.midi_channels || []).slice().sort((a, b) => a.order - b.order), [config.midi_channels])
+  // The sends row grows with the number of returns; keep the flow height cap in step.
+  const template = useMemo(() => gridTemplate(sortedReturns.length), [sortedReturns.length])
+  const flowMaxHeight = `calc(${GRID_MAX_HEIGHT} + ${LANE_H + 40 + sendsRowHeight(sortedReturns.length) - 64}px)`
+  const excludedCount = sortedInputs.filter(c => c.send_to_master === false).length + sortedMidi.filter(c => c.send_to_master === false).length
   const selectedMidiChannel = sortedMidi.find(c => c.id === selectedMidiId) || null
 
   if (loading) {
@@ -272,153 +307,173 @@ export default function Mixer({ graph }) {
         </div>
       )}
 
-      {/* ─── Mixer Grid (header rail + strips, subgrid rows) ─── */}
+      {/* ─── Flujo: ENTRADAS → RETURNS (sends) · ENTRADAS → MASTER (directo) ───
+          Un solo scroll horizontal; el bloque MASTER es sticky a la derecha.
+          Los returns NO se enrutan al master (son fuente virtual para apps). */}
       <div className="flex-1 overflow-x-auto overflow-y-hidden" style={{ backgroundColor: PANEL_BG }}>
         <div
           className="h-full"
           style={{
             display: 'grid',
-            gridTemplateRows: GRID_TEMPLATE,
-            gridAutoFlow: 'column',
-            // Columns are declared explicitly rather than left to
-            // `gridAutoColumns`, because the spacer between the input block and
-            // the return block has to be a flexible track while the strips stay
-            // fixed. Auto columns would force one size on all of them.
-            gridTemplateColumns: [
-              RAIL_WIDTH,
-              `repeat(${sortedInputs.length}, ${STRIP_WIDTH})`,
-              `repeat(${sortedMidi.length}, ${STRIP_WIDTH})`,
-              // Pushes returns to the right edge, and collapses to just the
-              // divider once enough strips exist to fill the row.
-              'minmax(17px, 1fr)',
-              `repeat(${sortedReturns.length + 1}, ${STRIP_WIDTH})`,
-            ].join(' '),
-            // Rows are capped, so without this the grid stretches to fill the
-            // window and every strip grows with it. Pin them to the top.
+            gridTemplateColumns: 'auto 72px auto minmax(40px, 1fr) auto',
+            gridTemplateRows: `${LANE_H}px minmax(0, 1fr)`,
             alignContent: 'start',
-            maxHeight: GRID_MAX_HEIGHT,
-            padding: '0.75em 1em 1em 1em',
-            rowGap: 4,
-            columnGap: 8,
-            width: '100%',
-            // Never below the strips' own width: the parent scrolls instead of
-            // squeezing them, which is what keeps the controls reachable.
+            maxHeight: flowMaxHeight,
+            padding: '0.5em 1em 1em 1em',
             minWidth: 'max-content',
           }}
         >
-          <HeaderRail />
-
-          {sortedInputs.map(ch => {
-            return (
-              <InputStrip
-                key={ch.id}
-                ch={ch}
-                returnChannels={sortedReturns}
-                sends={config.sends}
-                captureNodes={captureNodes}
-                faderVal={getFader(`in-${ch.id}`)}
-                setFader={setFader}
-                onRemoveInput={removeInput}
-                onOpenModal={setModal}
-                onDragStart={handleDragStart}
-                onDragOver={handleDragOver}
-                onDragLeave={handleDragLeave}
-                onDragEnd={handleDragEnd}
-                onDrop={handleDrop}
-                isDragging={draggedInfo && draggedInfo.id === ch.id && draggedInfo.isInput === true}
-                isDragOverTarget={dragOverId === ch.id}
-                soloActive={soloSet.has(`in-${ch.id}`)}
-                onSoloToggle={handleSoloToggle}
-                onMonoToggle={handleMonoToggle}
-                onError={handleError}
-                onFaderDrag={onFaderDrag}
-              />
-            )
-          })}
-
-          {sortedMidi.map(ch => {
-            return (
-              <MidiStrip
-                key={ch.id}
-                ch={ch}
-                returnChannels={sortedReturns}
-                sends={config.sends}
-                loaded={loadedMidiIds.has(ch.id)}
-                selected={selectedMidiId === ch.id}
-                onSelect={() => setSelectedMidiId(sel => sel === ch.id ? null : ch.id)}
-                faderVal={getFader(`midi-${ch.id}`)}
-                setFader={setFader}
-                onRemove={handleMidiRemove}
-                soloActive={soloSet.has(`midi-${ch.id}`)}
-                onSoloToggle={handleMidiSoloToggle}
-                onError={handleError}
-                onFaderDrag={onFaderDrag}
-              />
-            )
-          })}
-
-          {/* Divider between the input block and the return/master block. */}
-          <div className="relative" style={{ gridRow: '1 / -1' }} aria-hidden="true">
-            <div
-              className="absolute inset-y-0 left-1/2 w-px -translate-x-1/2"
-              style={{
-                background:
-                  'linear-gradient(to bottom, transparent, rgba(255,255,255,0.26) 10%, rgba(255,255,255,0.26) 90%, transparent)',
-                boxShadow: '1px 0 0 rgba(0,0,0,0.6)',
-              }}
-            />
-            {/* Rotated caption. Fits even when the spacer collapses to its
-                17px floor, so the two blocks stay labelled at any width. */}
-            <div
-              className="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 whitespace-nowrap text-[8px] font-bold uppercase tracking-[0.2em]"
-              style={{
-                color: RAIL_TEXT,
-                opacity: 0.75,
-                writingMode: 'vertical-rl',
-                transform: 'translate(-50%, -50%) rotate(180deg)',
-                backgroundColor: PANEL_BG,
-                padding: '6px 1px',
-              }}
-            >
-              Returns
+          {/* Carril master: camino directo entradas → master por encima de los returns. */}
+          <div style={{ gridColumn: '1 / 5', gridRow: 1, display: 'grid', gridTemplateColumns: 'subgrid' }} aria-hidden="true">
+            <div className="relative">
+              <div className="absolute right-6 bottom-0 w-px" style={{ top: LANE_H / 2, backgroundColor: GREEN_DIM }} />
+              <div className="absolute right-0" style={{ width: 24, top: LANE_H / 2, height: 1, backgroundColor: GREEN_DIM }} />
             </div>
+            <div className="relative"><div className="absolute inset-x-0" style={{ top: LANE_H / 2, height: 1, backgroundColor: GREEN_DIM }} /></div>
+            <div className="relative">
+              <div className="absolute inset-x-0" style={{ top: LANE_H / 2, height: 1, backgroundColor: GREEN_DIM }} />
+              <span
+                className="absolute left-1/2 -translate-x-1/2 whitespace-nowrap px-2 text-[8px] font-bold uppercase tracking-[0.2em]"
+                style={{ top: LANE_H / 2 - 6, color: GREEN, backgroundColor: PANEL_BG }}
+              >
+                master · directo, sin pasar por returns
+              </span>
+            </div>
+            <div className="relative"><div className="absolute inset-x-0" style={{ top: LANE_H / 2, height: 1, backgroundColor: GREEN_DIM }} /></div>
           </div>
 
-          {sortedReturns.map((ret, idx) => {
-            return (
-              <ReturnStrip
-                key={ret.id}
-                ret={ret}
-                faderVal={getFader(`ret-${ret.id}`)}
-                setFader={setFader}
-                onRemoveReturn={removeReturn}
-                onOpenModal={setModal}
-                onDragStart={handleDragStart}
-                onDragOver={handleDragOver}
-                onDragLeave={handleDragLeave}
-                onDragEnd={handleDragEnd}
-                onDrop={handleDrop}
-                isDragging={draggedInfo && draggedInfo.id === ret.id && draggedInfo.isInput === false}
-                isDragOverTarget={dragOverId === ret.id}
-                soloActive={soloSet.has(`ret-${ret.id}`)}
-                onSoloToggle={handleSoloToggle}
-                letter={String.fromCharCode(65 + idx)}
-                onError={handleError}
-                onFaderDrag={onFaderDrag}
-              />
-            )
-          })}
+          {/* ENTRADAS */}
+          <FlowBlock
+            style={{ gridColumn: 1, gridRow: 2 }}
+            title="Entradas"
+            caption={`fuentes y MIDI${excludedCount ? ` · ${excludedCount} fuera de master` : ''}`}
+            template={template}
+            columns={[RAIL_WIDTH, `repeat(${sortedInputs.length + sortedMidi.length}, ${STRIP_WIDTH})`].join(' ')}
+          >
+            <HeaderRail />
 
-          <MasterStrip
-            masterSink={config.master_sink}
-            masterMuted={config.master_muted}
-            masterPan={config.master_pan}
-            sinkNodes={sinkNodes}
-            faderVal={getFader('master')}
-            setFader={setFader}
-            onError={handleError}
-            onFaderDrag={onFaderDrag}
-          />
+            {sortedInputs.map(ch => {
+              return (
+                <InputStrip
+                  key={ch.id}
+                  ch={ch}
+                  returnChannels={sortedReturns}
+                  sends={config.sends}
+                  captureNodes={captureNodes}
+                  faderVal={getFader(`in-${ch.id}`)}
+                  setFader={setFader}
+                  onRemoveInput={removeInput}
+                  onOpenModal={setModal}
+                  onDragStart={handleDragStart}
+                  onDragOver={handleDragOver}
+                  onDragLeave={handleDragLeave}
+                  onDragEnd={handleDragEnd}
+                  onDrop={handleDrop}
+                  isDragging={draggedInfo && draggedInfo.id === ch.id && draggedInfo.isInput === true}
+                  isDragOverTarget={dragOverId === ch.id}
+                  soloActive={soloSet.has(`in-${ch.id}`)}
+                  onSoloToggle={handleSoloToggle}
+                  onMonoToggle={handleMonoToggle}
+                  onError={handleError}
+                  onFaderDrag={onFaderDrag}
+                />
+              )
+            })}
+
+            {sortedMidi.map(ch => {
+              return (
+                <MidiStrip
+                  key={ch.id}
+                  ch={ch}
+                  returnChannels={sortedReturns}
+                  sends={config.sends}
+                  loaded={loadedMidiIds.has(ch.id)}
+                  selected={selectedMidiId === ch.id}
+                  onSelect={() => setSelectedMidiId(sel => sel === ch.id ? null : ch.id)}
+                  faderVal={getFader(`midi-${ch.id}`)}
+                  setFader={setFader}
+                  onRemove={handleMidiRemove}
+                  soloActive={soloSet.has(`midi-${ch.id}`)}
+                  onSoloToggle={handleMidiSoloToggle}
+                  onError={handleError}
+                  onFaderDrag={onFaderDrag}
+                />
+              )
+            })}
+          </FlowBlock>
+
+          {/* Conector ENTRADAS → RETURNS */}
+          <div className="flex flex-col items-center justify-center gap-1 select-none" style={{ gridColumn: 2, gridRow: 2 }} aria-hidden="true">
+            <span className="text-[8px] font-bold uppercase tracking-[0.2em]" style={{ color: RAIL_TEXT }}>sends</span>
+            <ArrowRight className="w-5 h-5" style={{ color: RAIL_TEXT }} />
+          </div>
+
+          {/* RETURNS */}
+          <FlowBlock
+            style={{ gridColumn: 3, gridRow: 2 }}
+            title="Returns"
+            caption="fuente virtual para apps"
+            template={template}
+            columns={`repeat(${Math.max(sortedReturns.length, 1)}, ${STRIP_WIDTH})`}
+          >
+            {sortedReturns.map((ret, idx) => {
+              return (
+                <ReturnStrip
+                  key={ret.id}
+                  ret={ret}
+                  faderVal={getFader(`ret-${ret.id}`)}
+                  setFader={setFader}
+                  onRemoveReturn={removeReturn}
+                  onOpenModal={setModal}
+                  onDragStart={handleDragStart}
+                  onDragOver={handleDragOver}
+                  onDragLeave={handleDragLeave}
+                  onDragEnd={handleDragEnd}
+                  onDrop={handleDrop}
+                  isDragging={draggedInfo && draggedInfo.id === ret.id && draggedInfo.isInput === false}
+                  isDragOverTarget={dragOverId === ret.id}
+                  soloActive={soloSet.has(`ret-${ret.id}`)}
+                  onSoloToggle={handleSoloToggle}
+                  letter={String.fromCharCode(65 + idx)}
+                  onError={handleError}
+                  onFaderDrag={onFaderDrag}
+                />
+              )
+            })}
+            {sortedReturns.length === 0 && (
+              <div className="row-span-7 flex items-center justify-center text-[9px] text-center px-2" style={{ gridRow: '1 / -1', color: RAIL_TEXT }}>
+                Sin returns. Añade uno con «+ Return».
+              </div>
+            )}
+          </FlowBlock>
+
+          {/* MASTER: sticky; el camino directo baja hasta él. */}
+          <div className="flex flex-col sticky right-0 pl-2" style={{ gridColumn: 5, gridRow: '1 / 3', backgroundColor: PANEL_BG, zIndex: 5 }}>
+            <div className="relative shrink-0" style={{ height: LANE_H }} aria-hidden="true">
+              <div className="absolute left-0" style={{ width: '50%', top: LANE_H / 2, height: 1, backgroundColor: GREEN_DIM }} />
+              <div className="absolute w-px" style={{ left: '50%', top: LANE_H / 2, bottom: 0, backgroundColor: GREEN_DIM }} />
+              <ArrowDown className="absolute w-3 h-3" style={{ left: '50%', bottom: -2, transform: 'translateX(-50%)', color: GREEN }} />
+            </div>
+            <FlowBlock
+              className="flex-1 min-h-0"
+              title="Master"
+              caption="salida final"
+              template={template}
+              columns={STRIP_WIDTH}
+              accent
+            >
+            <MasterStrip
+              masterSink={config.master_sink}
+              masterMuted={config.master_muted}
+              masterPan={config.master_pan}
+              sinkNodes={sinkNodes}
+              faderVal={getFader('master')}
+              setFader={setFader}
+              onError={handleError}
+              onFaderDrag={onFaderDrag}
+            />
+            </FlowBlock>
+          </div>
         </div>
       </div>
 

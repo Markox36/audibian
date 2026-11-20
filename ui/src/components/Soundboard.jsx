@@ -1,6 +1,6 @@
 import React, { useEffect, useState, useCallback, useRef } from 'react'
 import { invoke } from '@tauri-apps/api/core'
-import { Play, Trash2, Plus, Square, Music, Scissors } from 'lucide-react'
+import { Plus, Square, Music, Scissors, MoreHorizontal } from 'lucide-react'
 
 // ---------------------------------------------------------------------------
 // Soundboard tab. Sounds play into the `audibian_soundboard` virtual input
@@ -16,23 +16,36 @@ const fmtTime = (ms) => {
   return m > 0 ? `${m}:${r.toFixed(2).padStart(5, '0')}` : `${r.toFixed(2)}s`
 }
 
+const PALETTE = ['#45d99a', '#5ab0ff', '#b48cff', '#ff8fb3', '#ffb454', '#ff6b6e', '#4fd6e0', '#c6e05a']
+const defaultColor = (id) => {
+  let h = 0
+  for (const ch of String(id)) h = (h * 31 + ch.charCodeAt(0)) >>> 0
+  return PALETTE[h % PALETTE.length]
+}
+const normKey = (k) => (k.length === 1 ? k.toUpperCase() : k)
+const isTyping = (el) => !!el && (/^(INPUT|TEXTAREA|SELECT)$/.test(el.tagName) || el.isContentEditable)
+const playLen = (s) => (s.duration_ms == null ? null : (s.end_ms ?? s.duration_ms) - (s.start_ms ?? 0))
+
 export default function Soundboard() {
   const [sounds, setSounds] = useState([])
   const [renaming, setRenaming] = useState(null) // { id, value }
   const [trimming, setTrimming] = useState(null) // { id, start, end }
   const [adding, setAdding] = useState(false)
   const [playError, setPlayError] = useState('')
+  const [plays, setPlays] = useState({}) // id -> { n, ms } progress bar run
+  const [menu, setMenu] = useState(null) // { id, x, y, mode: 'main' | 'color' }
+  const [capturing, setCapturing] = useState(null) // sound id awaiting a key
   // Poll while there are sounds without a duration yet (background probe).
   const pollRef = useRef(null)
+  const live = useRef({})
+  live.current = { sounds, capturing, menu, trimming, renaming }
 
   const refresh = useCallback(() => {
-    invoke('soundboard_list').then(setSounds).catch(console.error)
+    invoke('soundboard_list').then(setSounds).catch(e => setPlayError(`No se pudo cargar la lista: ${e}`))
   }, [])
 
   useEffect(() => { refresh() }, [refresh])
 
-  // Keep polling list while any sound is still being probed. Cheap call,
-  // stops automatically once every entry has a duration.
   useEffect(() => {
     const needs = sounds.some(s => s.duration_ms == null)
     if (!needs) {
@@ -57,7 +70,7 @@ export default function Soundboard() {
       await Promise.all(
         paths.map(p =>
           invoke('soundboard_add', { sourcePath: p, displayName: null })
-            .catch(console.error)
+            .catch(fail('Error al añadir'))
         )
       )
       refresh()
@@ -70,17 +83,35 @@ export default function Soundboard() {
     setPlayError('')
     try {
       await invoke('soundboard_play', { id })
+      const s = live.current.sounds.find(x => x.id === id)
+      const ms = s && playLen(s)
+      setPlays(p => {
+        const next = { ...p }
+        if (Number.isFinite(ms) && ms > 0) next[id] = { n: (p[id]?.n ?? 0) + 1, ms }
+        else delete next[id]
+        return next
+      })
     } catch (error) {
-      setPlayError(String(error))
+      setPlayError(`Error al reproducir: ${error}`)
     }
   }
 
   const handleStopAll = () => {
-    invoke('soundboard_stop_all').catch(console.error)
+    setPlays({})
+    invoke('soundboard_stop_all').catch(e => setPlayError(`Error al parar: ${e}`))
   }
 
+  const fail = (what) => (e) => setPlayError(`${what}: ${e}`)
+
   const handleRemove = (id) => {
-    invoke('soundboard_remove', { id }).then(refresh).catch(console.error)
+    invoke('soundboard_remove', { id }).then(refresh).catch(fail('Error al quitar'))
+  }
+
+  const setMeta = (s, key, color) => {
+    setPlayError('')
+    invoke('soundboard_set_meta', { id: s.id, key, color })
+      .then(refresh)
+      .catch(fail('Error al guardar'))
   }
 
   const commitRename = () => {
@@ -90,7 +121,7 @@ export default function Soundboard() {
     if (trimmed) {
       invoke('soundboard_rename', { id, name: trimmed })
         .then(refresh)
-        .catch(console.error)
+        .catch(fail('Error al renombrar'))
     }
     setRenaming(null)
   }
@@ -110,16 +141,14 @@ export default function Soundboard() {
       const t = (v || '').trim()
       if (!t) return null
       const n = parseFloat(t)
-      if (!isFinite(n) || n < 0) return null
+      if (!Number.isFinite(n) || n < 0) return null
       return Math.round(n * 1000)
     }
-    const startMs = parse(trimming.start)
-    const endMs = parse(trimming.end)
     invoke('soundboard_set_trim', {
       id: trimming.id,
-      startMs,
-      endMs,
-    }).then(refresh).catch(console.error)
+      startMs: parse(trimming.start),
+      endMs: parse(trimming.end),
+    }).then(refresh).catch(fail('Error al recortar'))
     setTrimming(null)
   }
 
@@ -129,12 +158,54 @@ export default function Soundboard() {
       id: trimming.id,
       startMs: null,
       endMs: null,
-    }).then(refresh).catch(console.error)
+    }).then(refresh).catch(fail('Error al recortar'))
     setTrimming(null)
   }
 
+  const askRemove = (s) => {
+    if (window.confirm(`¿Quitar «${s.name}» del soundboard?`)) handleRemove(s.id)
+  }
+
+  // One keydown listener for the lifetime of the tab (not a global hotkey).
+  const handlers = useRef({})
+  handlers.current = { handlePlay, handleStopAll, setMeta }
+  useEffect(() => {
+    const onKey = (e) => {
+      const { sounds, capturing, menu, trimming, renaming } = live.current
+      if (capturing != null) {
+        e.preventDefault()
+        if (e.repeat || ['Shift', 'Control', 'Alt', 'Meta'].includes(e.key)) return
+        const s = sounds.find(x => x.id === capturing)
+        setCapturing(null)
+        if (e.key === 'Escape' || !s) return
+        handlers.current.setMeta(s, e.key === 'Backspace' ? null : normKey(e.key), s.color ?? null)
+        return
+      }
+      if (isTyping(e.target) || e.ctrlKey || e.altKey || e.metaKey || e.repeat) return
+      if (e.key === 'Escape') {
+        if (menu) setMenu(null)
+        else if (!trimming && !renaming) handlers.current.handleStopAll()
+        return
+      }
+      if (trimming || menu) return
+      const k = normKey(e.key)
+      const s = sounds.find(x => x.key === k)
+      if (s && s.duration_ms != null) {
+        e.preventDefault()
+        handlers.current.handlePlay(s.id)
+      }
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [])
+
+  const menuSound = menu && sounds.find(s => s.id === menu.id)
+  const openMenu = (id, x, y) => setMenu({ id, x, y, mode: 'main' })
+  const menuItem = 'w-full text-left px-3 py-1.5 text-[11px] text-neutral-200 hover:bg-white/[0.08] focus:bg-white/[0.08] focus:outline-none'
+
   return (
     <div className="flex-1 flex flex-col h-full bg-[#101013] text-neutral-300 font-sans overflow-hidden">
+      <style>{'@keyframes sb-fill{from{width:0}to{width:100%}}'}</style>
 
       {/* Toolbar */}
       <div className="flex items-center justify-between px-4 py-1.5 bg-white/[0.04] border-b border-white/[0.08] gap-3 h-[42px] shrink-0 text-xs text-neutral-300 select-none">
@@ -144,7 +215,7 @@ export default function Soundboard() {
             Soundboard
           </span>
           <span className="text-[9px] font-mono text-neutral-500">
-            {sounds.length} sound{sounds.length === 1 ? '' : 's'} · routed via Mixer strip <span className="text-neutral-300">Soundboard</span>
+            {sounds.length} sonido{sounds.length === 1 ? '' : 's'} · salida por el strip <span className="text-neutral-300">Soundboard</span> del Mixer
           </span>
         </div>
 
@@ -155,7 +226,7 @@ export default function Soundboard() {
             className="bg-white/[0.05] border border-white/[0.08] hover:bg-[#45d99a]/15 hover:border-[#45d99a]/60 hover:text-white text-neutral-200 text-[9px] font-bold uppercase tracking-wider py-1 px-2.5 rounded-md transition-colors flex items-center gap-1.5 disabled:opacity-50"
           >
             <Plus className="w-3 h-3 text-[#45d99a]" />
-            {adding ? 'Picking…' : 'Add Sounds'}
+            {adding ? 'Eligiendo…' : 'Añadir sonidos'}
           </button>
           <button
             onClick={handleStopAll}
@@ -163,7 +234,8 @@ export default function Soundboard() {
             className="bg-white/[0.05] border border-white/[0.08] hover:bg-[#ff6b6e]/15 hover:border-[#ff6b6e]/60 hover:text-[#ff6b6e] text-neutral-200 text-[9px] font-bold uppercase tracking-wider py-1 px-2.5 rounded-md transition-colors flex items-center gap-1.5 disabled:opacity-40 disabled:cursor-not-allowed"
           >
             <Square className="w-3 h-3" />
-            Stop all
+            Parar todo
+            <kbd className="font-mono text-[8px] text-neutral-500 border border-white/[0.12] rounded px-1">Esc</kbd>
           </button>
         </div>
       </div>
@@ -172,7 +244,7 @@ export default function Soundboard() {
           role="alert"
           className="mx-4 mt-2 rounded-sm border border-[#ff6b6e]/40 bg-[#ff6b6e]/10 px-3 py-2 text-[10px] text-[#ff9b9d]"
         >
-          Playback failed: {playError}
+          {playError}
         </div>
       )}
 
@@ -181,88 +253,146 @@ export default function Soundboard() {
         {sounds.length === 0 ? (
           <div className="flex flex-col items-center justify-center h-full text-neutral-500">
             <Music className="w-10 h-10 opacity-30 mb-3" />
-            <div className="text-[11px] uppercase tracking-widest font-bold mb-1">No sounds yet</div>
-            <div className="text-[9px] font-mono opacity-70">Use “Add Sounds” to upload one or many at once</div>
+            <div className="text-[11px] uppercase tracking-widest font-bold mb-1">Aún no hay sonidos</div>
+            <div className="text-[9px] font-mono opacity-70">Usa «Añadir sonidos» para subir uno o varios a la vez</div>
           </div>
         ) : (
-          <div className="grid gap-2 grid-cols-[repeat(auto-fill,minmax(180px,1fr))]">
+          <div className="grid gap-3 grid-cols-[repeat(auto-fill,minmax(170px,1fr))]">
             {sounds.map(s => {
               const hasTrim = s.start_ms != null || s.end_ms != null
-              const trimDur = hasTrim
-                ? ((s.end_ms ?? s.duration_ms ?? 0) - (s.start_ms ?? 0))
-                : s.duration_ms
+              const color = s.color || defaultColor(s.id)
+              const run = plays[s.id]
+              const ready = s.duration_ms != null
               return (
                 <div
                   key={s.id}
-                  className="bg-[#1f1f1f] border border-white/[0.06] rounded-md p-2.5 flex flex-col gap-2 hover:border-[#45d99a]/40 transition-colors group"
+                  onContextMenu={e => { e.preventDefault(); openMenu(s.id, e.clientX, e.clientY) }}
+                  style={{ backgroundColor: `${color}26`, borderColor: `${color}99` }}
+                  className="relative overflow-hidden rounded-xl border min-h-[110px] group"
                 >
-                  <div className="flex items-center justify-between gap-1">
-                    {renaming?.id === s.id ? (
-                      <input
-                        autoFocus
-                        value={renaming.value}
-                        onChange={e => setRenaming({ id: s.id, value: e.target.value })}
-                        onBlur={commitRename}
-                        onKeyDown={e => {
-                          if (e.key === 'Enter') commitRename()
-                          if (e.key === 'Escape') setRenaming(null)
-                        }}
-                        className="flex-1 min-w-0 bg-black/40 border border-white/[0.08] text-[11px] text-neutral-100 font-semibold px-1.5 py-0.5 rounded-sm focus:outline-none focus:border-[#45d99a]"
-                      />
-                    ) : (
-                      <div
-                        onDoubleClick={() => setRenaming({ id: s.id, value: s.name })}
-                        className="text-[11px] font-semibold text-neutral-100 truncate flex-1 cursor-text"
-                        title={`${s.name} — ${s.path}`}
-                      >
-                        {s.name}
-                      </div>
-                    )}
-                    <button
-                      onClick={() => openTrim(s)}
-                      className={`p-0.5 transition-colors shrink-0 ${
-                        hasTrim
-                          ? 'text-[#a18c47] hover:text-[#d4be75]'
-                          : 'text-neutral-500 hover:text-neutral-200 opacity-0 group-hover:opacity-100'
-                      }`}
-                      title={hasTrim ? `Trimmed: ${fmtTime(s.start_ms ?? 0)} → ${fmtTime(s.end_ms ?? s.duration_ms)}` : 'Trim'}
-                    >
-                      <Scissors className="w-3.5 h-3.5" />
-                    </button>
-                    <button
-                      onClick={() => handleRemove(s.id)}
-                      className="text-neutral-500 hover:text-[#ff6b6e] opacity-0 group-hover:opacity-100 transition-opacity shrink-0 p-0.5"
-                      title="Remove"
-                    >
-                      <Trash2 className="w-3.5 h-3.5" />
-                    </button>
-                  </div>
-
-                  <div className="flex items-center justify-between text-[8.5px] font-mono text-neutral-500">
-                    <span>
-                      {s.duration_ms == null
-                        ? <span className="text-neutral-600 italic">importing…</span>
-                        : <>dur {fmtTime(s.duration_ms)}</>}
-                    </span>
-                    {hasTrim && (
-                      <span className="text-[#a18c47]">trim {fmtTime(trimDur)}</span>
-                    )}
-                  </div>
-
                   <button
                     onClick={() => handlePlay(s.id)}
-                    disabled={s.duration_ms == null}
-                    className="w-full bg-[#45d99a]/15 border border-[#45d99a]/40 hover:bg-[#45d99a]/30 hover:border-[#45d99a] text-[#45d99a] text-[10px] font-bold uppercase tracking-wider py-2 rounded-sm transition-colors flex items-center justify-center gap-1.5 disabled:opacity-40 disabled:cursor-not-allowed"
-                  >
-                    <Play className="w-3 h-3" />
-                    Play
-                  </button>
+                    disabled={!ready}
+                    aria-label={`Reproducir ${s.name}`}
+                    className="absolute inset-0 w-full h-full hover:bg-white/[0.06] focus-visible:ring-2 focus-visible:ring-white/60 transition-colors disabled:cursor-not-allowed"
+                  />
+                  <div className="relative pointer-events-none h-full p-3 pb-4 flex flex-col justify-between gap-2">
+                    <div className="flex items-start justify-between gap-2">
+                      {renaming?.id === s.id ? (
+                        <input
+                          autoFocus
+                          value={renaming.value}
+                          onChange={e => setRenaming({ id: s.id, value: e.target.value })}
+                          onBlur={commitRename}
+                          onKeyDown={e => {
+                            if (e.key === 'Enter') commitRename()
+                            if (e.key === 'Escape') setRenaming(null)
+                          }}
+                          className="pointer-events-auto flex-1 min-w-0 bg-black/40 border border-white/[0.08] text-[12px] text-neutral-100 font-semibold px-1.5 py-0.5 rounded-sm focus:outline-none focus:border-[#45d99a]"
+                        />
+                      ) : (
+                        <div className="text-[12px] font-semibold text-neutral-100 break-words line-clamp-2 flex-1 min-w-0" title={`${s.name} — ${s.path}`}>
+                          {s.name}
+                        </div>
+                      )}
+                      <button
+                        onClick={e => { const r = e.currentTarget.getBoundingClientRect(); openMenu(s.id, r.left, r.bottom) }}
+                        aria-label={`Opciones de ${s.name}`}
+                        aria-haspopup="menu"
+                        className="pointer-events-auto shrink-0 p-0.5 rounded text-neutral-300 hover:text-white hover:bg-black/30 focus-visible:ring-2 focus-visible:ring-white/60"
+                      >
+                        <MoreHorizontal className="w-4 h-4" />
+                      </button>
+                    </div>
+                    <div className="flex items-end justify-between text-[9px] font-mono text-neutral-300/80">
+                      <span>
+                        {!ready
+                          ? <span className="italic text-neutral-400">importando…</span>
+                          : <>{hasTrim && <Scissors className="inline w-3 h-3 mr-1 -mt-0.5" />}{fmtTime(playLen(s))}</>}
+                      </span>
+                      {s.key && (
+                        <kbd className="font-mono text-[10px] font-bold text-neutral-100 bg-black/40 border border-white/20 rounded px-1.5 py-0.5">
+                          {s.key}
+                        </kbd>
+                      )}
+                    </div>
+                  </div>
+                  {run && (
+                    <div className="absolute left-0 bottom-0 h-1 w-full bg-black/30 pointer-events-none">
+                      <div
+                        key={run.n}
+                        onAnimationEnd={() => setPlays(p => { const n = { ...p }; delete n[s.id]; return n })}
+                        style={{ backgroundColor: color, animation: `sb-fill ${run.ms}ms linear forwards` }}
+                        className="h-full"
+                      />
+                    </div>
+                  )}
                 </div>
               )
             })}
           </div>
         )}
       </div>
+
+      <div className="shrink-0 px-4 py-1.5 border-t border-white/[0.08] text-[9px] font-mono text-neutral-500 select-none">
+        Las teclas solo funcionan con la pestaña Soundboard abierta (no son atajos globales). Clic derecho o ⋯ para editar un pad.
+      </div>
+
+      {capturing != null && (
+        <div role="status" className="fixed bottom-10 left-1/2 -translate-x-1/2 z-50 rounded-md border border-[#45d99a]/60 bg-[#101013] px-4 py-2 text-[11px] text-neutral-100 shadow-2xl">
+          Pulsa una tecla para asignarla · Retroceso la borra · Esc cancela
+        </div>
+      )}
+
+      {/* Pad menu */}
+      {menu && menuSound && (
+        <div className="fixed inset-0 z-50" onClick={() => setMenu(null)} onContextMenu={e => { e.preventDefault(); setMenu(null) }}>
+          <div
+            role="menu"
+            style={{ left: Math.max(4, Math.min(menu.x, window.innerWidth - 220)), top: Math.max(4, Math.min(menu.y, window.innerHeight - 260)) }}
+            className="absolute w-52 rounded-lg border border-white/[0.1] bg-[#1a1a1f] shadow-2xl py-1"
+            onClick={e => e.stopPropagation()}
+          >
+            {menu.mode === 'main' ? (
+              <>
+                <button role="menuitem" autoFocus className={menuItem} onClick={() => { setRenaming({ id: menuSound.id, value: menuSound.name }); setMenu(null) }}>Renombrar</button>
+                <button role="menuitem" className={menuItem} onClick={() => { openTrim(menuSound); setMenu(null) }}>Recortar</button>
+                <button role="menuitem" className={menuItem} onClick={() => setMenu({ ...menu, mode: 'color' })}>Color…</button>
+                <button role="menuitem" className={menuItem} onClick={() => { setCapturing(menuSound.id); setMenu(null) }}>
+                  Asignar tecla{menuSound.key ? ` (${menuSound.key})` : ''}
+                </button>
+                <button role="menuitem" className={`${menuItem} text-[#ff6b6e]`} onClick={() => { askRemove(menuSound); setMenu(null) }}>Quitar</button>
+              </>
+            ) : (
+              <div className="px-3 py-2 flex flex-col gap-2">
+                <div className="text-[9px] font-bold uppercase tracking-wider text-neutral-400">Color</div>
+                <div className="flex flex-wrap gap-1.5">
+                  {PALETTE.map(c => (
+                    <button
+                      key={c}
+                      aria-label={`Color ${c}`}
+                      onClick={() => { setMeta(menuSound, menuSound.key ?? null, c); setMenu(null) }}
+                      style={{ backgroundColor: c }}
+                      className="w-6 h-6 rounded-md border border-white/20 focus-visible:ring-2 focus-visible:ring-white/70"
+                    />
+                  ))}
+                </div>
+                <label className="flex items-center gap-2 text-[10px] text-neutral-300">
+                  Personalizado
+                  <input
+                    type="color"
+                    defaultValue={menuSound.color || defaultColor(menuSound.id)}
+                    onChange={e => setMeta(menuSound, menuSound.key ?? null, e.target.value)}
+                    className="w-8 h-6 bg-transparent border-0 p-0"
+                  />
+                </label>
+                <button className="text-left text-[10px] text-neutral-400 hover:text-neutral-100" onClick={() => setMenu({ ...menu, mode: 'main' })}>← Volver</button>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
 
       {/* Trim modal */}
       {trimming && (

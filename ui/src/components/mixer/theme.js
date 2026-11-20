@@ -42,9 +42,13 @@ export const ROWS_FIXED = 236 + 24 + 28
 export const METER_MAX = 560
 export const GRID_MAX_HEIGHT = `${ROWS_FIXED + METER_MAX}px`
 
-export const GRID_TEMPLATE = [
+// Sends row grows with the number of returns: one master chip + one row per
+// send (letter + level slider), 18px each, 4px gaps, 8px padding.
+export const sendsRowHeight = (nReturns) => Math.max(64, 8 + 18 * (nReturns + 1) + 4 * nReturns)
+
+export const gridTemplate = (nReturns) => [
   ROW_HEIGHTS.input,
-  ROW_HEIGHTS.sends,
+  `${sendsRowHeight(nReturns)}px`,
   ROW_HEIGHTS.output,
   ROW_HEIGHTS.pan,
   ROW_HEIGHTS.volume,
@@ -56,7 +60,7 @@ export const GRID_TEMPLATE = [
 // desktop app compacts down to a floor and then refuses to shrink further.
 // Below the floor the grid scrolls horizontally instead of crushing the
 // controls — 92px is the width at which mute, solo and remove still fit.
-export const STRIP_WIDTH = 'clamp(92px, 7.5vw, 132px)'
+export const STRIP_WIDTH = 'clamp(112px, 8vw, 160px)'
 export const RAIL_WIDTH  = 'clamp(58px, 5vw, 78px)'
 
 export const DB_TICKS = [0, 6, 12, 18, 24, 30, 36, 42, 48, 54]

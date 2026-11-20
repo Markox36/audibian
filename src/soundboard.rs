@@ -30,6 +30,12 @@ pub struct Sound {
     pub start_ms: Option<u32>,
     #[serde(default)]
     pub end_ms: Option<u32>,
+    /// Keyboard shortcut that fires this pad (a single `KeyboardEvent.key`).
+    #[serde(default)]
+    pub key: Option<String>,
+    /// Pad colour as `#rrggbb`.
+    #[serde(default)]
+    pub color: Option<String>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]

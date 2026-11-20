@@ -10,6 +10,7 @@ import Profiles from './components/Profiles'
 import Settings from './components/Settings'
 import Soundboard from './components/Soundboard'
 import MidiChannels from './components/MidiChannels'
+import StatusBar from './components/StatusBar'
 
 const TAB_IDS = ['matrix', 'mixer', 'soundboard', 'midi', 'effects', 'profiles', 'settings']
 
@@ -111,7 +112,10 @@ export default function App() {
       // Nothing consumed it, so the setting silently did nothing.
       listen('default-profile', e => {
         invoke('apply_profile_cmd', { name: e.payload })
-          .then(() => localStorage.setItem('audibian.activeProfile', e.payload))
+          .then(() => {
+            localStorage.setItem('audibian.activeProfile', e.payload)
+            window.dispatchEvent(new CustomEvent('audibian:active-profile', { detail: e.payload }))
+          })
           .catch(console.error)
       }),
     ])
@@ -199,6 +203,8 @@ export default function App() {
           <Settings uiScale={uiScale} onScaleChange={applyScale} />
         )}
       </main>
+
+      <StatusBar graph={graph} pwConnected={pwConnected} />
     </div>
   )
 }

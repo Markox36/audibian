@@ -135,15 +135,20 @@ The window is organised in tabs: **Matrix · Mixer · Soundboard · MIDI · Effe
 
 ### Matrix
 
-A grid of every output port (rows) against every input port (columns). Click a
-cell to create the link, click again to destroy it.
+A grid of sources (apps and inputs, rows) against destinations (outputs, columns).
+Each cell cycles **— → Stereo → Mono → —**; *Avanzado* on a row opens the
+per-port crosspoints for exact wiring. Search and "only connected" filters, a
+green bars icon marks nodes PipeWire reports as running (activity, not a level
+meter), and *Guardar como perfil* snapshots the current state as a profile.
 
 ### Mixer
 
 Input strips, return buses and the master bus. Each strip has a fader, pan,
 mute, solo and a stereo level meter. Input strips also have a persistent Mono
-toggle that centers the selected capture source. Sends route inputs to returns,
-and each input can be toggled in or out of the master bus.
+toggle that centers the selected capture source. The strips are drawn as the
+routing really works: ENTRADAS feed the master directly (each can be excluded)
+and feed RETURNS through sends with their own level; returns are virtual
+sources for apps and do not go to the master.
 
 Strips are backed by real PipeWire null-sinks named `audibian_<name>`, so any
 application can select them as its output device.
@@ -152,12 +157,16 @@ application can select them as its output device.
 
 Add sound files to the library and trigger them into the `audibian_soundboard`
 strip. Audibian decodes all supported files through ffmpeg to raw PCM, with
-optional start/end trimming applied on the fly.
+optional start/end trimming applied on the fly. Sounds are pads with a colour
+and an optional keyboard key (right-click / ⋯ to edit); `Esc` stops everything.
+Keys only fire while the Soundboard tab is open — they are not global hotkeys.
 
 ### MIDI
 
 Manage MIDI channels and host plugins. Loaded plugins receive live MIDI from
-connected keyboards, and their GUI opens in its own window.
+connected keyboards, and their GUI opens in its own window. Each channel is a
+rack row with its plugin chain and an output meter. Only the first plugin of a
+chain is hosted today; serial effect chains are not implemented yet.
 
 Native Linux VST3 bundles (`~/.vst3`, `/usr/lib/vst3`, `/usr/local/lib/vst3`)
 are picked up automatically. **Windows** VST3 plugins run through
@@ -188,7 +197,8 @@ bridged plugins are ordinary native `.vst3` bundles once synced (they land in
 ### Effects
 
 1. Select a **sink** from the drop-down.
-2. Adjust the 5-band EQ (Low Shelf · Peak × 3 · High Shelf).
+2. Adjust the 5-band EQ by dragging the nodes on the response curve (wheel =
+   Q, arrow keys = frequency/gain) or editing the band table.
 3. Apply — a virtual sink `audibian-eq-<name>` appears; route your apps to it.
 
 Noise suppression lives in the same tab: toggle the switch next to any
@@ -197,14 +207,17 @@ Discord, OBS or similar instead of the raw microphone.
 
 ### Profiles
 
-Save the current routing and mixer state as a named profile, reload it later,
-or mark one as default so it is applied at startup once PipeWire has enumerated
-every node.
+Profiles are a row of scene cards: click one to apply it, and use the hover
+actions to mark it as the startup profile, update it with the current state,
+rename, duplicate or delete it.
 
 ### Settings
 
-The ⚙ tab holds UI scaling, the low-latency PipeWire drop-in toggle and the
-autostart switch, which writes `~/.config/autostart/audibian.desktop`.
+The ⚙ tab has a sidebar: General (UI scale), Audio (low-latency PipeWire
+drop-in), Arranque (autostart, which writes `~/.config/autostart/audibian.desktop`,
+and the startup profile), Atajos and Acerca de. A status bar at the bottom of
+the window shows the PipeWire connection, the active profile, node/link counts
+and the quantum.
 
 ---
 

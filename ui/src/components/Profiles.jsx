@@ -55,6 +55,7 @@ export default function Profiles() {
     setActive(name)
     if (name) localStorage.setItem(ACTIVE_KEY, name)
     else localStorage.removeItem(ACTIVE_KEY)
+    window.dispatchEvent(new CustomEvent('audibian:active-profile', { detail: name }))
   }
 
   const applyProfile = (name) => {

@@ -1,4 +1,4 @@
-import React, { useState, useMemo, useCallback } from 'react'
+import React, { useState, useMemo, useCallback, useEffect, useRef } from 'react'
 import { invoke } from '@tauri-apps/api/core'
 import { Search, X, Unplug } from 'lucide-react'
 
@@ -44,20 +44,50 @@ const isAudioNode = (n) =>
   !HIDDEN_NODE_RE.test(n.name || '') &&
   !HIDDEN_APP_NAMES.has(n.app_name || '')
 
+const EQ_CSS = `
+@keyframes mx-eq { 0%,100% { transform: scaleY(.3) } 50% { transform: scaleY(1) } }
+.mx-eq i { display:block; width:2px; height:10px; background:#45d99a; border-radius:1px; transform-origin:bottom; transform:scaleY(.6) }
+@media (prefers-reduced-motion: no-preference) {
+  .mx-eq i { animation: mx-eq .9s ease-in-out infinite }
+  .mx-eq i:nth-child(2) { animation-delay: .3s }
+  .mx-eq i:nth-child(3) { animation-delay: .6s }
+}`
+
+// Data is flowing through the node; not a level meter.
+const Eq = () => (
+  <span className="mx-eq inline-flex items-end gap-[2px] h-[10px] shrink-0" role="img" aria-label="activo" title="activo">
+    <i /><i /><i />
+  </span>
+)
+
+// Mode of a src/dst node pair given their sorted ports.
+function pairMode(outs, ins, has) {
+  if (!outs.length || !ins.length) return 'none'
+  let count = 0
+  for (const o of outs) for (const i of ins) if (has(o.id, i.id)) count++
+  if (count === 0) return 'none'
+  if (count === outs.length * ins.length) return 'mono'
+  if (count === 2 && outs.length >= 2 && ins.length >= 2 && has(outs[0].id, ins[0].id) && has(outs[1].id, ins[1].id)) return 'stereo'
+  return 'mixed'
+}
+
+const NEXT = (mode, canStereo) =>
+  mode === 'none' ? (canStereo ? 'stereo' : 'mono') : mode === 'stereo' ? 'mono' : 'none'
+
+const LABEL = { stereo: 'Stereo', mono: 'Mono', mixed: 'Parcial' }
+
 export default function Matrix({ graph, onCreateLink, onDestroyLink }) {
   const { nodes, ports, links } = graph
-  const [direction, setDirection] = useState('outputs')
-  const [selectedId, setSelectedId] = useState(null)
-  const [search, setSearch] = useState('')
   const [error, setError] = useState('')
-  const fail = (e) => setError(String(e))
+  const [search, setSearch] = useState('')
+  const [onlyConnected, setOnlyConnected] = useState(false)
+  const [expanded, setExpanded] = useState(null)
+  const [running, setRunning] = useState(() => new Set())
+  const [saving, setSaving] = useState(false)
+  const [profileName, setProfileName] = useState('')
+  const [status, setStatus] = useState(null)
+  const fail = useCallback((e) => setError(String(e)), [])
 
-  const sideDir = direction === 'outputs' ? 'Output' : 'Input'
-  const otherDir = direction === 'outputs' ? 'Input' : 'Output'
-
-  // Ports grouped once per graph change: the detail view asks for a node's
-  // ports on every render, and re-filtering the whole port list each time is
-  // O(nodes × ports) on every PipeWire event.
   const portsIndex = useMemo(() => {
     const m = new Map()
     for (const p of ports) {
@@ -74,195 +104,146 @@ export default function Matrix({ graph, onCreateLink, onDestroyLink }) {
     [portsIndex]
   )
 
-  const sidebarNodes = useMemo(() => {
-    const q = search.toLowerCase().trim()
-    return nodes
-      .filter(isAudioNode)
-      .filter(n => ports.some(p => p.node_id === n.id && p.direction === sideDir))
-      .filter(n => !q || displayName(n).toLowerCase().includes(q))
-      .sort((a, b) => displayName(a).localeCompare(displayName(b)))
-  }, [nodes, ports, sideDir, search])
-
-  const otherNodes = useMemo(() =>
-    nodes
-      .filter(isAudioNode)
-      .filter(n => ports.some(p => p.node_id === n.id && p.direction === otherDir))
-      .sort((a, b) => displayName(a).localeCompare(displayName(b))),
-    [nodes, ports, otherDir]
-  )
-
-  const connCount = useMemo(() => {
-    const m = new Map()
-    for (const l of links) {
-      const localId = sideDir === 'Output' ? l.output_port_id : l.input_port_id
-      const p = ports.find(p => p.id === localId)
-      if (p) m.set(p.node_id, (m.get(p.node_id) ?? 0) + 1)
-    }
-    return m
-  }, [links, ports, sideDir])
-
   const linkLookup = useMemo(() => {
     const m = new Map()
     for (const l of links) m.set(`${l.output_port_id}-${l.input_port_id}`, l)
     return m
   }, [links])
 
-  const effectiveSelected = useMemo(() => {
-    if (selectedId) {
-      const found = sidebarNodes.find(n => n.id === selectedId)
-      if (found) return found
+  const audioNodes = useMemo(
+    () => nodes.filter(isAudioNode).sort((a, b) => displayName(a).localeCompare(displayName(b))),
+    [nodes]
+  )
+
+  // Nodes that have at least one link (for "Solo conectados").
+  const linkedNodes = useMemo(() => {
+    const nodeOfPort = new Map()
+    for (const p of ports) nodeOfPort.set(p.id, p.node_id)
+    const s = new Set()
+    for (const l of links) {
+      s.add(nodeOfPort.get(l.output_port_id))
+      s.add(nodeOfPort.get(l.input_port_id))
     }
-    return sidebarNodes[0] ?? null
-  }, [selectedId, sidebarNodes])
+    return s
+  }, [ports, links])
 
-  const linkIdOf = (myPort, otherPort) => {
-    const outId = sideDir === 'Output' ? myPort.id : otherPort.id
-    const inId = sideDir === 'Output' ? otherPort.id : myPort.id
-    return [outId, inId]
-  }
-  const isConnected = (myPort, otherPort) => {
-    const [outId, inId] = linkIdOf(myPort, otherPort)
-    return linkLookup.has(`${outId}-${inId}`)
-  }
-  // Persist the expected link set only once the graph change actually
-  // succeeded; otherwise a failed link is saved and reapplied at startup.
-  const toggleConn = (myPort, otherPort) => {
-    const [outId, inId] = linkIdOf(myPort, otherPort)
-    const link = linkLookup.get(`${outId}-${inId}`)
-    const op = link ? onDestroyLink(link.id) : onCreateLink(outId, inId)
+  const { rows, cols } = useMemo(() => {
+    const q = search.toLowerCase().trim()
+    const keep = (n) =>
+      (!q || displayName(n).toLowerCase().includes(q)) && (!onlyConnected || linkedNodes.has(n.id))
+    return {
+      rows: audioNodes.filter(n => portsOf(n.id, 'Output').length && keep(n)),
+      cols: audioNodes.filter(n => portsOf(n.id, 'Input').length && keep(n)),
+    }
+  }, [audioNodes, portsOf, search, onlyConnected, linkedNodes])
 
-    const otherNode = nodes.find(n => n.id === otherPort.node_id)
-    if (!otherNode || !effectiveSelected) return
-    const isNowConn = !link
-    const otherPorts = portsOf(otherNode.id, otherDir)
-    op.then(() => {
-      const newLinks = []
-      for (const mp of myPorts) {
-        for (const op2 of otherPorts) {
-          const [oId, iId] = linkIdOf(mp, op2)
-          let conn = linkLookup.has(`${oId}-${iId}`)
-          if (mp.id === myPort.id && op2.id === otherPort.id) conn = isNowConn
-          if (conn) {
-            newLinks.push([
-              sideDir === 'Output' ? mp.name : op2.name,
-              sideDir === 'Output' ? op2.name : mp.name,
-            ])
-          }
-        }
+  const apps = useMemo(() => rows.filter(n => n.media_class?.startsWith('Stream/Output')), [rows])
+  const inputs = useMemo(() => rows.filter(n => !n.media_class?.startsWith('Stream/Output')), [rows])
+
+  const has = useCallback((o, i) => linkLookup.has(`${o}-${i}`), [linkLookup])
+
+  // Per-row string of "mode+/-" per column so memoised rows only re-render
+  // when one of their own cells changes.
+  const modesByRow = useMemo(() => {
+    const m = new Map()
+    for (const r of rows) {
+      const outs = portsOf(r.id, 'Output')
+      m.set(r.id, cols.map(c => {
+        const ins = portsOf(c.id, 'Input')
+        return pairMode(outs, ins, has) + (outs.length >= 2 && ins.length >= 2 ? '+' : '-')
+      }).join(','))
+    }
+    return m
+  }, [rows, cols, portsOf, has])
+
+  // Latest graph data for stable callbacks.
+  const ctx = useRef({})
+  ctx.current = { nodes, portsOf, linkLookup, onCreateLink, onDestroyLink }
+
+  const persist = useCallback((src, dst, pairs) =>
+    invoke('save_matrix_connections', {
+      srcNode: src.name, dstNode: dst.name,
+      links: pairs.map(([o, i]) => [o.name, i.name]),
+    }), [])
+
+  const cycle = useCallback((src, dst, mode, canStereo) => {
+    const { portsOf, linkLookup, onCreateLink, onDestroyLink } = ctx.current
+    const outs = portsOf(src.id, 'Output')
+    const ins = portsOf(dst.id, 'Input')
+    const next = NEXT(mode, canStereo)
+    const want = []
+    if (next === 'stereo') for (let i = 0; i < 2; i++) want.push([outs[i], ins[i]])
+    else if (next === 'mono') for (const o of outs) for (const i of ins) want.push([o, i])
+    const ops = []
+    for (const o of outs) for (const i of ins) {
+      const l = linkLookup.get(`${o.id}-${i.id}`)
+      if (l) ops.push(onDestroyLink(l.id))
+    }
+    for (const [o, i] of want) ops.push(onCreateLink(o.id, i.id))
+    setError('')
+    Promise.all(ops).then(() => persist(src, dst, want)).catch(fail)
+  }, [persist, fail])
+
+  // Persist the node pair's full expected link set only once the op succeeded.
+  const togglePort = useCallback((src, dst, op, ip) => {
+    const { portsOf, linkLookup, onCreateLink, onDestroyLink } = ctx.current
+    const link = linkLookup.get(`${op.id}-${ip.id}`)
+    const run = link ? onDestroyLink(link.id) : onCreateLink(op.id, ip.id)
+    setError('')
+    run.then(() => {
+      const want = []
+      for (const o of portsOf(src.id, 'Output')) for (const i of portsOf(dst.id, 'Input')) {
+        const on = o.id === op.id && i.id === ip.id ? !link : linkLookup.has(`${o.id}-${i.id}`)
+        if (on) want.push([o, i])
       }
-      saveNodePair(otherNode, newLinks)
+      return persist(src, dst, want)
     }).catch(fail)
-  }
+  }, [persist, fail])
 
-  const clearNode = () => {
-    if (!effectiveSelected) return
-    const myPortIds = new Set(portsOf(effectiveSelected.id, sideDir).map(p => p.id))
-    const ops = []
-    for (const l of links) {
-      const id = sideDir === 'Output' ? l.output_port_id : l.input_port_id
-      if (myPortIds.has(id)) ops.push(onDestroyLink(l.id))
+  const toggleExpanded = useCallback((id) => setExpanded(cur => (cur === id ? null : id)), [])
+
+  // Activity polling.
+  useEffect(() => {
+    let last = ''
+    const tick = () => {
+      if (document.visibilityState !== 'visible') return
+      invoke('get_node_activity').then(ids => {
+        const arr = Array.isArray(ids) ? ids.filter(Number.isFinite).sort((a, b) => a - b) : []
+        const key = arr.join(',')
+        if (key !== last) { last = key; setRunning(new Set(arr)) }
+      }).catch(() => { if (last) { last = ''; setRunning(new Set()) } })
     }
-    // Wipe persisted connections for all pairs involving this node
-    Promise.all(ops)
-      .then(() => { for (const other of otherNodes) saveNodePair(other, []) })
-      .catch(fail)
-  }
+    tick()
+    const t = setInterval(tick, 1000)
+    document.addEventListener('visibilitychange', tick)
+    return () => { clearInterval(t); document.removeEventListener('visibilitychange', tick) }
+  }, [])
 
-  const myPorts = effectiveSelected ? portsOf(effectiveSelected.id, sideDir) : EMPTY_PORTS
-
-  // One pass over the visible targets instead of recomputing the mode twice
-  // per target button on every render.
-  const connModes = useMemo(() => {
-    const modes = new Map()
-    for (const other of otherNodes) {
-      const targetPorts = portsOf(other.id, otherDir)
-      if (myPorts.length === 0 || targetPorts.length === 0) { modes.set(other.id, 'none'); continue }
-      let count = 0
-      for (const mp of myPorts) {
-        for (const tp of targetPorts) {
-          if (isConnected(mp, tp)) count++
-        }
+  const saveProfile = async (e) => {
+    e.preventDefault()
+    const name = profileName.trim()
+    if (!name || saving) return
+    setSaving(true)
+    try {
+      const ok = await invoke('snapshot_profile_cmd', { name })
+      if (ok === true) {
+        localStorage.setItem('audibian.activeProfile', name)
+        window.dispatchEvent(new CustomEvent('audibian:active-profile', { detail: name }))
+        setStatus({ ok: true, text: `Perfil «${name}» guardado` })
+        setProfileName('')
+        setSaveOpen(false)
+      } else {
+        setStatus({ ok: false, text: 'No se pudo guardar el perfil' })
       }
-      let mode
-      if (count === 0) mode = 'none'
-      // All×all = mono mode
-      else if (count === myPorts.length * targetPorts.length) mode = 'mono'
-      else {
-        // L→L + R→R only = stereo
-        const hasL2L = isConnected(myPorts[0], targetPorts[0])
-        const hasR2R = myPorts.length >= 2 && targetPorts.length >= 2 && isConnected(myPorts[1], targetPorts[1])
-        mode = hasL2L && hasR2R && count === 2 ? 'stereo' : 'mixed'
-      }
-      modes.set(other.id, mode)
+    } catch (err) {
+      setStatus({ ok: false, text: `No se pudo guardar el perfil: ${err}` })
+    } finally {
+      setSaving(false)
     }
-    return modes
-  }, [otherNodes, portsOf, otherDir, myPorts, linkLookup, sideDir])
-
-  const saveNodePair = (targetNode, newLinks) => {
-    if (!effectiveSelected || !targetNode) return
-    const srcName = sideDir === 'Output' ? effectiveSelected.name : targetNode.name
-    const dstName = sideDir === 'Output' ? targetNode.name : effectiveSelected.name
-    invoke('save_matrix_connections', { srcNode: srcName, dstNode: dstName, links: newLinks }).catch(fail)
   }
+  const [saveOpen, setSaveOpen] = useState(false)
 
-  const clearPairLinks = (targetNodeId) => {
-    const targetPorts = portsOf(targetNodeId, otherDir)
-    const targetPortIds = new Set(targetPorts.map(p => p.id))
-    const myPortIds = new Set(myPorts.map(p => p.id))
-    const ops = []
-    for (const l of links) {
-      const myId = sideDir === 'Output' ? l.output_port_id : l.input_port_id
-      const otherId = sideDir === 'Output' ? l.input_port_id : l.output_port_id
-      if (myPortIds.has(myId) && targetPortIds.has(otherId)) {
-        ops.push(onDestroyLink(l.id))
-      }
-    }
-    return ops
-  }
-
-  // Mono = all output ports → all input ports (L→L, L→R, R→L, R→R)
-  const connectMono = (targetNodeId) => {
-    if (!myPorts.length) return
-    const targetPorts = portsOf(targetNodeId, otherDir)
-    if (!targetPorts.length) return
-    const targetNode = nodes.find(n => n.id === targetNodeId)
-
-    const ops = clearPairLinks(targetNodeId)
-
-    const newLinks = []
-    for (const mp of myPorts) {
-      for (const tp of targetPorts) {
-        const [outId, inId] = linkIdOf(mp, tp)
-        ops.push(onCreateLink(outId, inId))
-        newLinks.push([
-          sideDir === 'Output' ? mp.name : tp.name,
-          sideDir === 'Output' ? tp.name : mp.name,
-        ])
-      }
-    }
-    Promise.all(ops).then(() => saveNodePair(targetNode, newLinks)).catch(fail)
-  }
-
-  const connectStereo = (targetNodeId) => {
-    const targetPorts = portsOf(targetNodeId, otherDir)
-    if (myPorts.length < 2 || targetPorts.length < 2) return
-    const targetNode = nodes.find(n => n.id === targetNodeId)
-
-    const ops = clearPairLinks(targetNodeId)
-
-    const newLinks = []
-    for (let i = 0; i < 2; i++) {
-      const [outId, inId] = linkIdOf(myPorts[i], targetPorts[i])
-      ops.push(onCreateLink(outId, inId))
-      newLinks.push([
-        sideDir === 'Output' ? myPorts[i].name : targetPorts[i].name,
-        sideDir === 'Output' ? targetPorts[i].name : myPorts[i].name,
-      ])
-    }
-    Promise.all(ops).then(() => saveNodePair(targetNode, newLinks)).catch(fail)
-  }
-
-  if (!nodes.filter(isAudioNode).length) {
+  if (!audioNodes.length) {
     return (
       <div className="flex-1 flex items-center justify-center bg-[#101013]">
         <div className="flex flex-col items-center gap-3.5 p-8 rounded-2xl border border-white/[0.08] bg-[#1b1b1b] max-w-xs text-center">
@@ -276,251 +257,255 @@ export default function Matrix({ graph, onCreateLink, onDestroyLink }) {
     )
   }
 
+  const renderGroup = (title, list) => list.length > 0 && (
+    <React.Fragment key={title}>
+      <tr>
+        <th
+          colSpan={cols.length + 1}
+          className="sticky left-0 text-left bg-[#101013] px-3 pt-3 pb-1 text-[10px] font-bold uppercase tracking-wider text-[#9a988c]"
+        >
+          {title}
+        </th>
+      </tr>
+      {list.map(r => (
+        <Row
+          key={r.id}
+          row={r}
+          cols={cols}
+          modes={modesByRow.get(r.id)}
+          active={running.has(r.id)}
+          open={expanded === r.id}
+          onToggle={toggleExpanded}
+          onCycle={cycle}
+          onTogglePort={togglePort}
+          portsOf={expanded === r.id ? portsOf : null}
+          has={expanded === r.id ? has : null}
+        />
+      ))}
+    </React.Fragment>
+  )
+
   return (
-    <div className="flex-1 flex h-full overflow-hidden bg-[#101013] text-[#eceade] font-sans">
-
-      {/* ── SIDEBAR ──────────────────────────────────────────────── */}
-      <aside className="w-[280px] min-w-[280px] flex flex-col border-r border-white/[0.08] bg-[#1b1b1b]">
-
-        {/* Direction tabs */}
-        <div className="flex p-2 gap-1 border-b border-white/[0.08]">
-          {[['outputs', 'Entradas'], ['inputs', 'Salidas']].map(([k, lbl]) => (
-            <button
-              key={k}
-              onClick={() => { setDirection(k); setSelectedId(null) }}
-              className={`flex-1 py-1.5 px-2 text-[11px] font-bold uppercase tracking-[0.06em] rounded-md cursor-pointer transition-colors ${direction === k
-                ? 'bg-[#45d99a] text-black'
-                : 'bg-transparent text-[#9a988c] border border-white/[0.08]'
-                }`}
-            >
-              {lbl}
-            </button>
-          ))}
-        </div>
-
-        {/* Search */}
-        <div className="p-2 border-b border-white/[0.08]">
-          <div className="flex items-center gap-1.5 px-2.5 py-1.5 bg-white/[0.04] border border-white/[0.08] rounded-md">
-            <Search className="w-3 h-3 text-[#9a988c] shrink-0" />
-            <input
-              type="text"
-              value={search}
-              onChange={e => setSearch(e.target.value)}
-              placeholder="Buscar nodos..."
-              className="flex-1 bg-transparent border-none outline-none text-[#eceade] text-xs placeholder-[#9a988c]/60"
-            />
-          </div>
-        </div>
-
-        {/* Node list */}
-        <div className="flex-1 overflow-y-auto p-1.5">
-          {sidebarNodes.length === 0 ? (
-            <div className="p-4 text-[11px] text-[#9a988c] text-center">
-              No se encontraron {direction === 'outputs' ? 'entradas' : 'salidas'}.
-            </div>
-          ) : sidebarNodes.map(n => {
-            const isSel = effectiveSelected?.id === n.id
-            const cnt = connCount.get(n.id) ?? 0
-            const c = nodeColor(n.media_class)
-            return (
-              <button
-                key={n.id}
-                onClick={() => setSelectedId(n.id)}
-                className={`mx-side-item flex items-center justify-between w-full px-2.5 py-2 mb-0.5 gap-2 rounded-md cursor-pointer text-left transition-colors ${isSel
-                  ? 'bg-[#45d99a]/[0.16] border border-[#45d99a]/40 text-[#eceade]'
-                  : 'bg-transparent border border-transparent text-[#9a988c]'
-                  }`}
-                style={{ borderLeft: `3px solid ${c}` }}
-                title={displayName(n)}
-              >
-                <span className={`overflow-hidden text-ellipsis whitespace-nowrap text-xs flex-1 min-w-0 ${isSel ? 'font-semibold' : 'font-medium'}`}>
-                  {displayName(n)}
-                </span>
-                <span className={`text-[10px] font-mono px-1.5 py-px rounded shrink-0 ${cnt > 0
-                  ? 'text-[#45d99a] bg-[#45d99a]/[0.12]'
-                  : 'text-[#9a988c] bg-white/[0.04]'
-                  }`}>
-                  {cnt}
-                </span>
-              </button>
-            )
-          })}
-        </div>
-      </aside>
-
-      {/* ── DETAIL ───────────────────────────────────────────────── */}
-      <main className="flex-1 flex flex-col overflow-hidden">
-        {error && (
-          <div
-            role="alert"
-            className="mx-4 mt-2 rounded-sm border border-[#ff6b6e]/40 bg-[#ff6b6e]/10 px-3 py-2 text-[11px] text-[#ff9b9d]"
-          >
-            {error}
-          </div>
-        )}
-        {!effectiveSelected ? (
-          <div className="flex-1 flex items-center justify-center text-[#9a988c] text-sm">
-            Select a node from the sidebar.
-          </div>
-        ) : (
-          <Detail
-            node={effectiveSelected}
-            myPorts={myPorts}
-            otherNodes={otherNodes}
-            portsOf={portsOf}
-            otherDir={otherDir}
-            isConnected={isConnected}
-            toggleConn={toggleConn}
-            clearNode={clearNode}
-            connModes={connModes}
-            connectMono={connectMono}
-            connectStereo={connectStereo}
+    <div className="flex-1 flex flex-col h-full overflow-hidden bg-[#101013] text-neutral-300 font-sans">
+      <style>{EQ_CSS}</style>
+      <div className="flex flex-wrap items-center gap-2 px-4 py-3 border-b border-white/[0.08] bg-[#1b1b1b]">
+        <div className="flex items-center gap-1.5 px-2.5 py-1.5 bg-white/[0.04] border border-white/[0.08] rounded-md">
+          <Search className="w-3 h-3 text-[#9a988c] shrink-0" />
+          <input
+            type="text"
+            value={search}
+            onChange={e => setSearch(e.target.value)}
+            placeholder="Buscar..."
+            aria-label="Buscar nodos"
+            className="w-44 bg-transparent border-none outline-none text-[#eceade] text-xs placeholder-[#9a988c]/60"
           />
+        </div>
+        <button
+          type="button"
+          aria-pressed={onlyConnected}
+          onClick={() => setOnlyConnected(v => !v)}
+          className={`px-2.5 py-1.5 rounded-md border text-[11px] font-semibold cursor-pointer ${onlyConnected
+            ? 'bg-[#45d99a] border-[#45d99a] text-black'
+            : 'bg-white/[0.04] border-white/[0.08] text-[#9a988c]'}`}
+        >
+          Solo conectados
+        </button>
+        <div className="flex-1" />
+        {status && (
+          <span role="status" className={`text-[11px] ${status.ok ? 'text-[#45d99a]' : 'text-[#ff9b9d]'}`}>
+            {status.text}
+          </span>
         )}
-      </main>
+        {saveOpen ? (
+          <form onSubmit={saveProfile} className="flex items-center gap-1.5">
+            <input
+              autoFocus
+              value={profileName}
+              onChange={e => setProfileName(e.target.value)}
+              placeholder="Nombre del perfil"
+              aria-label="Nombre del perfil"
+              className="w-40 px-2.5 py-1.5 bg-white/[0.04] border border-white/[0.08] rounded-md outline-none text-[#eceade] text-xs placeholder-[#9a988c]/60"
+            />
+            <button
+              type="submit"
+              disabled={saving || !profileName.trim()}
+              className="px-2.5 py-1.5 rounded-md bg-[#45d99a] text-black text-[11px] font-semibold cursor-pointer disabled:opacity-40"
+            >
+              Guardar
+            </button>
+            <button
+              type="button"
+              onClick={() => setSaveOpen(false)}
+              aria-label="Cancelar"
+              className="p-1.5 rounded-md border border-white/[0.08] text-[#9a988c] cursor-pointer"
+            >
+              <X className="w-3 h-3" />
+            </button>
+          </form>
+        ) : (
+          <button
+            type="button"
+            onClick={() => { setSaveOpen(true); setStatus(null) }}
+            className="px-2.5 py-1.5 rounded-md border border-white/[0.08] bg-white/[0.05] text-[11px] font-semibold text-[#eceade] cursor-pointer hover:bg-white/[0.1]"
+          >
+            Guardar como perfil
+          </button>
+        )}
+      </div>
+
+      {error && (
+        <div
+          role="alert"
+          className="mx-4 mt-2 rounded-sm border border-[#ff6b6e]/40 bg-[#ff6b6e]/10 px-3 py-2 text-[11px] text-[#ff9b9d]"
+        >
+          {error}
+        </div>
+      )}
+
+      <div className="flex-1 overflow-auto">
+        {rows.length === 0 || cols.length === 0 ? (
+          <div className="p-8 text-center text-[#9a988c] text-xs">Ningún nodo coincide con el filtro.</div>
+        ) : (
+          <table className="border-separate border-spacing-0 text-[11px]">
+            <thead>
+              <tr>
+                <th className="sticky top-0 left-0 z-30 bg-[#101013] min-w-[200px] border-b border-white/[0.08]" />
+                {cols.map(c => (
+                  <th
+                    key={c.id}
+                    className="sticky top-0 z-20 bg-[#101013] border-b border-white/[0.08] px-2 py-2 min-w-[96px] max-w-[140px] align-bottom"
+                    title={displayName(c)}
+                  >
+                    <div className="flex items-center justify-center gap-1.5">
+                      <span className="w-2 h-2 rounded-full shrink-0" style={{ background: nodeColor(c.media_class) }} />
+                      <span className="truncate text-[11px] font-semibold text-[#eceade]">{displayName(c)}</span>
+                      {running.has(c.id) && <Eq />}
+                    </div>
+                  </th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {renderGroup('Aplicaciones', apps)}
+              {renderGroup('Entradas', inputs)}
+            </tbody>
+          </table>
+        )}
+      </div>
     </div>
   )
 }
 
-const Detail = React.memo(function Detail({
-  node,
-  myPorts,
-  otherNodes,
-  portsOf,
-  otherDir,
-  isConnected,
-  toggleConn,
-  clearNode,
-  connModes,
-  connectMono,
-  connectStereo,
-}) {
-  const [pairTarget, setPairTarget] = useState('')
-  const c = nodeColor(node.media_class)
-  const totalConn = otherNodes.reduce((sum, o) =>
-    sum + portsOf(o.id, otherDir).reduce((s, op) =>
-      s + myPorts.reduce((ss, mp) => ss + (isConnected(mp, op) ? 1 : 0), 0)
-      , 0)
-    , 0)
-
+const Row = React.memo(function Row({ row, cols, modes, active, open, onToggle, onCycle, onTogglePort, portsOf, has }) {
+  const tokens = modes ? modes.split(',') : []
+  const name = displayName(row)
   return (
     <>
-      {/* Header */}
-      <div className="flex items-center justify-between px-5 py-3 border-b border-white/[0.08] bg-[#1b1b1b]">
-        <div className="flex items-center gap-3">
-          <span className="w-2.5 h-2.5 rounded-full shrink-0" style={{ background: c }} />
-          <div>
-            <div className="text-sm font-semibold text-[#eceade]">{displayName(node)}</div>
-            <div className="text-[10px] font-mono text-[#9a988c] mt-px">
-              {node.media_class} · {myPorts.length} port{myPorts.length !== 1 ? 's' : ''} · {totalConn} active
-            </div>
+      <tr>
+        <th
+          scope="row"
+          className="sticky left-0 z-10 bg-[#101013] border-b border-white/[0.05] px-3 py-1.5 text-left font-normal min-w-[200px] max-w-[240px]"
+        >
+          <div className="flex items-center gap-2">
+            <span className="w-2 h-2 rounded-full shrink-0" style={{ background: nodeColor(row.media_class) }} />
+            <span className="truncate text-xs font-semibold text-[#eceade]" title={name}>{name}</span>
+            {active && <Eq />}
+            <button
+              type="button"
+              onClick={() => onToggle(row.id)}
+              aria-expanded={open}
+              className="ml-auto shrink-0 text-[10px] text-[#9a988c] hover:text-[#eceade] cursor-pointer"
+            >
+              Avanzado {open ? '▴' : '▾'}
+            </button>
           </div>
-        </div>
-      </div>
-
-      {/* Mini-grids scroll */}
-      <div className="flex-1 overflow-y-auto p-4 flex flex-wrap content-start gap-3">
-        {otherNodes.length === 0 ? (
-          <div className="p-8 text-center text-[#9a988c] text-xs">
-            No targets available.
-          </div>
-        ) : otherNodes.map(other => {
-          const otherPorts = portsOf(other.id, otherDir)
-          if (!otherPorts.length) return null
-          const oc = nodeColor(other.media_class)
+        </th>
+        {cols.map((c, idx) => {
+          const t = tokens[idx] ?? 'none-'
+          const mode = t.slice(0, -1)
+          const canStereo = t.endsWith('+')
+          const label = LABEL[mode]
           return (
-            <div key={other.id} className="border border-white/[0.08] rounded-lg bg-[#1e1e1e] w-fit">
-              <div
-                className="flex items-center justify-between px-3.5 py-2 border-b border-white/[0.08]"
-                style={{ borderLeft: `3px solid ${oc}` }}
+            <td key={c.id} className="border-b border-white/[0.05] p-1 text-center">
+              <button
+                type="button"
+                onClick={() => onCycle(row, c, mode, canStereo)}
+                title={`${name} → ${displayName(c)}${label ? `: ${label}` : ''}`}
+                aria-label={`${name} a ${displayName(c)}: ${label ?? 'sin conexión'}`}
+                className={`w-full min-w-[64px] px-2 py-1 rounded-md border text-[10px] font-semibold cursor-pointer ${mode === 'none'
+                  ? 'border-transparent text-[#9a988c]/50 hover:bg-white/[0.06]'
+                  : mode === 'mixed'
+                    ? 'bg-[#45d99a]/[0.12] border-[#45d99a]/40 text-[#45d99a]'
+                    : 'bg-[#45d99a] border-[#45d99a] text-black'}`}
               >
-                <div className="flex items-center gap-2.5">
-                  <span className="text-xs font-semibold text-[#eceade]">{displayName(other)}</span>
-                  <span className="text-[9px] font-mono text-[#9a988c] uppercase tracking-[0.05em]">
-                    {other.media_class}
-                  </span>
-                </div>
-                <div className="flex items-center gap-1.5">
-                  <button
-                    onClick={() => connectMono(other.id)}
-                    disabled={!myPorts.length || !otherPorts.length}
-                    className={`px-2 py-0.5 rounded border text-[10px] font-semibold transition-colors cursor-pointer disabled:opacity-40 disabled:cursor-default ${
-                      connModes.get(other.id) === 'mono'
-                        ? 'bg-[#45d99a] border-[#45d99a] text-black'
-                        : 'bg-white/[0.04] border-white/[0.08] text-[#9a988c] hover:text-[#eceade] hover:bg-white/[0.1]'
-                    }`}
-                  >
-                    Mono
-                  </button>
-                  <button
-                    onClick={() => connectStereo(other.id)}
-                    disabled={myPorts.length < 2 || otherPorts.length < 2}
-                    className={`px-2 py-0.5 rounded border text-[10px] font-semibold transition-colors cursor-pointer disabled:opacity-40 disabled:cursor-default ${
-                      connModes.get(other.id) === 'stereo'
-                        ? 'bg-[#45d99a] border-[#45d99a] text-black'
-                        : 'bg-white/[0.04] border-white/[0.08] text-[#9a988c] hover:text-[#eceade] hover:bg-white/[0.1]'
-                    }`}
-                  >
-                    Stereo
-                  </button>
-                </div>
-              </div>
-              <div className="p-3 overflow-x-auto">
-                <table className="border-separate border-spacing-1 text-[11px]">
-                  <thead>
-                    <tr>
-                      <th />
-                      {otherPorts.map(p => (
-                        <th key={p.id} className="text-[9px] font-mono font-semibold text-[#9a988c] px-1.5 py-0.5 text-center min-w-[44px] uppercase tracking-[0.03em]">
-                          {p.name}
-                        </th>
-                      ))}
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {myPorts.map(mp => (
-                      <tr key={mp.id}>
-                        <td className="text-[10px] font-mono text-[#9a988c] px-2.5 py-1 text-right whitespace-nowrap">
-                          {mp.name} <span className="text-[#45d99a] font-bold">→</span>
-                        </td>
-                        {otherPorts.map(op => {
-                          const conn = isConnected(mp, op)
-                          return (
-                            <td key={op.id} className="p-0">
-                              <button
-                                className={`mx-conn w-7 h-7 block mx-auto rounded-md cursor-pointer p-0 ${conn
-                                  ? 'bg-[#45d99a] border border-[#45d99a]/70'
-                                  : 'bg-white/[0.04] border border-white/[0.08]'
-                                  }`}
-                                onClick={() => toggleConn(mp, op)}
-                                aria-pressed={conn}
-                                title={conn ? `Disconnect ${mp.name} → ${op.name}` : `Connect ${mp.name} → ${op.name}`}
-                              />
-                            </td>
-                          )
-                        })}
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            </div>
+                {label ?? '—'}
+              </button>
+            </td>
           )
         })}
-      </div>
-
-      {/* Bulk actions footer */}
-      <div className="flex gap-2 px-5 py-2.5 border-t border-white/[0.08] bg-[#1b1b1b] items-center">
-        <div className="flex-1" />
-
-        <button
-          onClick={clearNode}
-          className="mx-btn inline-flex items-center gap-1.5 px-3 py-1.5 bg-[#ff6b6e]/[0.12] text-[#ff6b6e] border border-[#ff6b6e]/30 rounded-md cursor-pointer text-[11px] font-semibold"
-        >
-          <X className="w-3 h-3" />
-          Clear all
-        </button>
-      </div>
+      </tr>
+      {open && portsOf && (
+        <tr>
+          <td colSpan={cols.length + 1} className="bg-white/[0.02] border-b border-white/[0.05] p-0">
+            <div className="sticky left-0 w-fit max-w-full p-3 flex flex-wrap gap-3">
+              {cols.map(dst => {
+                const outs = portsOf(row.id, 'Output')
+                const ins = portsOf(dst.id, 'Input')
+                if (!ins.length) return null
+                return (
+                  <div key={dst.id} className="border border-white/[0.08] rounded-lg bg-[#1e1e1e] w-fit">
+                    <div
+                      className="px-3 py-1.5 border-b border-white/[0.08] text-xs font-semibold text-[#eceade]"
+                      style={{ borderLeft: `3px solid ${nodeColor(dst.media_class)}` }}
+                    >
+                      {displayName(dst)}
+                    </div>
+                    <div className="p-2 overflow-x-auto">
+                      <table className="border-separate border-spacing-1 text-[11px]">
+                        <thead>
+                          <tr>
+                            <th />
+                            {ins.map(p => (
+                              <th key={p.id} className="text-[9px] font-mono font-semibold text-[#9a988c] px-1.5 py-0.5 text-center min-w-[44px] uppercase tracking-[0.03em]">
+                                {p.name}
+                              </th>
+                            ))}
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {outs.map(mp => (
+                            <tr key={mp.id}>
+                              <td className="text-[10px] font-mono text-[#9a988c] px-2.5 py-1 text-right whitespace-nowrap">
+                                {mp.name} <span className="text-[#45d99a] font-bold">→</span>
+                              </td>
+                              {ins.map(ip => {
+                                const conn = has(mp.id, ip.id)
+                                return (
+                                  <td key={ip.id} className="p-0">
+                                    <button
+                                      type="button"
+                                      className={`mx-conn w-7 h-7 block mx-auto rounded-md cursor-pointer p-0 ${conn
+                                        ? 'bg-[#45d99a] border border-[#45d99a]/70'
+                                        : 'bg-white/[0.04] border border-white/[0.08]'}`}
+                                      onClick={() => onTogglePort(row, dst, mp, ip)}
+                                      aria-pressed={conn}
+                                      title={conn ? `Desconectar ${mp.name} → ${ip.name}` : `Conectar ${mp.name} → ${ip.name}`}
+                                    />
+                                  </td>
+                                )
+                              })}
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
+                )
+              })}
+            </div>
+          </td>
+        </tr>
+      )}
     </>
   )
 })

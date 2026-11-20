@@ -180,6 +180,61 @@ pub fn rename_profile(state: State<AppState>, from: String, to: String) -> Resul
     Ok(())
 }
 
+#[derive(serde::Serialize)]
+pub struct PwStatus {
+    /// Effective quantum in samples (forced value if set, else the clock's).
+    pub quantum: u32,
+    pub rate: u32,
+}
+
+/// Quantum and sample rate for the status bar, read from PipeWire's
+/// `settings` metadata.
+#[tauri::command(async)]
+pub fn get_pw_status() -> PwStatus {
+    let out = std::process::Command::new("pw-metadata")
+        .args(["-n", "settings", "0"])
+        .output()
+        .map(|o| String::from_utf8_lossy(&o.stdout).into_owned())
+        .unwrap_or_default();
+    parse_pw_status(&out)
+}
+
+fn parse_pw_status(txt: &str) -> PwStatus {
+    let value = |key: &str| -> u32 {
+        txt.lines()
+            .find(|l| l.contains(&format!("key:'{key}'")))
+            .and_then(|l| l.split("value:'").nth(1))
+            .and_then(|v| v.split('\'').next())
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(0)
+    };
+    let forced = value("clock.force-quantum");
+    PwStatus {
+        quantum: if forced > 0 { forced } else { value("clock.quantum") },
+        rate: match value("clock.force-rate") {
+            0 => value("clock.rate"),
+            r => r,
+        },
+    }
+}
+
+/// Ids of nodes PipeWire reports as `running` (data is flowing through them).
+/// There is no per-app level here: capturing an application's stream would
+/// add a second route that the single-route enforcement removes.
+#[tauri::command(async)]
+pub fn get_node_activity() -> Vec<u32> {
+    let Ok(out) = std::process::Command::new("pw-dump").output() else { return Vec::new() };
+    parse_running_nodes(&out.stdout)
+}
+
+fn parse_running_nodes(json: &[u8]) -> Vec<u32> {
+    let Ok(objs) = serde_json::from_slice::<Vec<serde_json::Value>>(json) else { return Vec::new() };
+    objs.iter()
+        .filter(|o| o["type"] == "PipeWire:Interface:Node" && o["info"]["state"] == "running")
+        .filter_map(|o| o["id"].as_u64().map(|i| i as u32))
+        .collect()
+}
+
 /// Push the (already-applied to MixerConfig) snapshot values through pactl
 /// without recreating any modules. Call after `snap.apply_to(&mut cfg)`.
 fn apply_mixer_snapshot_runtime(state: &AppState) {
@@ -2095,6 +2150,8 @@ pub fn soundboard_add(
             duration_ms: None,
             start_ms: None,
             end_ms: None,
+            key: None,
+            color: None,
         };
         cfg.sounds.push(s.clone());
         cfg.save();
@@ -2145,6 +2202,32 @@ pub fn soundboard_rename(state: State<AppState>, id: u32, name: String) {
         s.name = name;
         cfg.save();
     }
+}
+
+/// Set or clear a pad's keyboard shortcut and colour. A key already used by
+/// another pad is rejected: two pads on one key would fire together.
+#[tauri::command(async)]
+pub fn soundboard_set_meta(
+    state: State<AppState>,
+    id: u32,
+    key: Option<String>,
+    color: Option<String>,
+) -> Result<(), String> {
+    let key = key.filter(|k| !k.is_empty());
+    let color = color.filter(|c| {
+        c.len() == 7 && c.starts_with('#') && c[1..].chars().all(|ch| ch.is_ascii_hexdigit())
+    });
+    let mut cfg = state.soundboard_config.lock();
+    if let Some(k) = &key {
+        if let Some(other) = cfg.sounds.iter().find(|s| s.id != id && s.key.as_deref() == Some(k)) {
+            return Err(format!("La tecla «{k}» ya la usa «{}»", other.name));
+        }
+    }
+    let s = cfg.sounds.iter_mut().find(|s| s.id == id).ok_or("Sonido no encontrado")?;
+    s.key = key;
+    s.color = color;
+    cfg.save();
+    Ok(())
 }
 
 /// Set or clear the trim window. Either bound may be `None` to disable
@@ -2896,5 +2979,29 @@ audibian_microfono:monitor_FR
         assert_eq!(parse_newest_sink_input(listing, 190), Some(1383));
         assert_eq!(parse_newest_sink_input(listing, 62), Some(125));
         assert_eq!(parse_newest_sink_input(listing, 999), None);
+    }
+
+    #[test]
+    fn pw_status_prefers_the_forced_quantum() {
+        let txt = "\
+update: id:0 key:'clock.rate' value:'48000' type:''
+update: id:0 key:'clock.quantum' value:'1024' type:''
+update: id:0 key:'clock.force-quantum' value:'256' type:''
+update: id:0 key:'clock.force-rate' value:'0' type:''
+";
+        let s = parse_pw_status(txt);
+        assert_eq!((s.quantum, s.rate), (256, 48000));
+        let s = parse_pw_status("update: id:0 key:'clock.quantum' value:'512' type:''");
+        assert_eq!(s.quantum, 512);
+    }
+
+    #[test]
+    fn only_running_nodes_are_active() {
+        let json = br#"[
+          {"id":49,"type":"PipeWire:Interface:Node","info":{"state":"running"}},
+          {"id":50,"type":"PipeWire:Interface:Node","info":{"state":"idle"}},
+          {"id":51,"type":"PipeWire:Interface:Port","info":{"state":"running"}}
+        ]"#;
+        assert_eq!(parse_running_nodes(json), vec![49]);
     }
 }

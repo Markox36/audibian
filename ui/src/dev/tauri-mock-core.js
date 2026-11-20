@@ -33,6 +33,57 @@ const state = {
   global_scale: 1.0,
 }
 
+
+// --- Matrix / soundboard / MIDI fixtures -----------------------------------
+const mkNode = (id, name, media_class, extra = {}) => ({
+  id, name, nick: null, description: extra.description ?? name, app_name: extra.app_name ?? null,
+  node_type: 'Unknown', media_class, x: 0, y: 0, volume: 1, muted: false,
+})
+const NODES = [
+  mkNode(10, 'brave', 'Stream/Output/Audio', { description: 'Brave', app_name: 'Brave' }),
+  mkNode(11, 'spotify', 'Stream/Output/Audio', { description: 'Spotify', app_name: 'Spotify' }),
+  mkNode(12, 'discord', 'Stream/Output/Audio', { description: 'Discord', app_name: 'WEBRTC VoiceEngine' }),
+  mkNode(20, 'alsa_input.usb-air', 'Audio/Source', { description: 'AIR 192 4 (micrófono)' }),
+  mkNode(30, 'alsa_output.usb-air', 'Audio/Sink', { description: 'Auriculares (AIR 192 4)' }),
+  mkNode(31, 'alsa_output.speakers', 'Audio/Sink', { description: 'Altavoces' }),
+  mkNode(40, 'obs-capture', 'Stream/Input/Audio', { description: 'OBS (captura)', app_name: 'OBS' }),
+]
+const PORTS = []
+let pid = 100
+for (const n of NODES) {
+  const mc = n.media_class
+  const outs = mc.startsWith('Stream/Output') || mc === 'Audio/Source'
+  const ins = mc === 'Audio/Sink' || mc.startsWith('Stream/Input')
+  for (const [i, ch] of ['FL', 'FR'].entries()) {
+    if (outs) PORTS.push({ id: pid++, node_id: n.id, name: `output_${ch}`, direction: 'Output', media_type: 'Audio', port_index: i })
+    if (ins) PORTS.push({ id: pid++, node_id: n.id, name: `playback_${ch}`, direction: 'Input', media_type: 'Audio', port_index: i })
+  }
+}
+const portOf = (node, dir, i) => PORTS.find(p => p.node_id === node && p.direction === dir && p.port_index === i)
+const LINKS = []
+let lid = 500
+const stereo = (a, b) => [0, 1].forEach(i => {
+  const o = portOf(a, 'Output', i), n = portOf(b, 'Input', i)
+  LINKS.push({ id: lid++, output_node_id: a, output_port_id: o.id, input_node_id: b, input_port_id: n.id, active: true })
+})
+stereo(10, 30); stereo(11, 30); stereo(11, 31); stereo(12, 30); stereo(12, 40); stereo(20, 40)
+const byId = (arr) => Object.fromEntries(arr.map(x => [x.id, x]))
+const GRAPH = { nodes: byId(NODES), ports: byId(PORTS), links: byId(LINKS) }
+
+const SOUNDS = [
+  { id: 2, name: 'fplol', path: '/x/2.mp3', duration_ms: 25536, start_ms: null, end_ms: 5000, key: 'Q', color: '#a18c47' },
+  { id: 3, name: 'superestrella', path: '/x/3.mp3', duration_ms: 5184, start_ms: null, end_ms: 2000, key: 'W', color: null },
+  { id: 4, name: 'panchito-repartidor', path: '/x/4.mp3', duration_ms: 15073, start_ms: null, end_ms: 5000, key: null, color: '#4169e1' },
+  { id: 5, name: 'symphony', path: '/x/5.wav', duration_ms: 5317, start_ms: null, end_ms: null, key: 'E', color: null },
+  { id: 6, name: 'latigo', path: '/x/6.mp3', duration_ms: 1149, start_ms: null, end_ms: null, key: null, color: null },
+]
+const MIDI = [
+  { id: 30, name: 'Piano', sink_name: 'audibian_piano', color: null, fader: 0.9, pan: 0, muted: false, plugins: [
+    { id: 1, format: 'VST3', identifier: '/home/u/.vst3/Pianoteq 8.vst3', name: 'Pianoteq 8' },
+    { id: 2, format: 'VST3', identifier: '/home/u/.vst3/Reverb.vst3', name: 'Reverb' } ] },
+  { id: 31, name: 'Kontakt', sink_name: 'audibian_kontakt', color: null, fader: 1, pan: 0, muted: false, plugins: [] },
+]
+
 const handlers = {
   get_mixer_config: () => state,
   get_solo_set: () => [],
@@ -42,7 +93,16 @@ const handlers = {
     { name: 'Música', created_at: '20400d 09:10:00 UTC', channels: 4, links: 8 },
     { name: 'Gaming', created_at: '2026-11-06T20:00:00Z', channels: 5, links: 11 },
   ],
-  get_graph: () => ({ nodes: {}, ports: {}, links: {} }),
+  get_graph: () => GRAPH,
+  get_pw_status: () => ({ quantum: 256, rate: 48000 }),
+  get_node_activity: () => [10, 12, 20],
+  get_ns_active: () => [],
+  get_eq_target: () => null,
+  soundboard_list: () => SOUNDS,
+  midi_channel_list: () => MIDI,
+  midi_loaded_channel_ids: () => [30],
+  list_profiles: () => ['Streaming', 'Música', 'Gaming'],
+  soundboard_set_meta: () => null,
 }
 
 export function invoke(cmd, args) {

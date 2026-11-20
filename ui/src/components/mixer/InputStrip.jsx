@@ -1,11 +1,12 @@
 import React, { useState, useEffect, useRef } from 'react'
 import { invoke } from '@tauri-apps/api/core'
-import { Settings, Plus, X, GripVertical } from 'lucide-react'
+import { Settings, X, GripVertical } from 'lucide-react'
 import { CREAM, FAINT, GREEN, GREEN_DIM, RAIL_TEXT, RED, autoColor, faderToDb } from './theme'
 import { MeterFader } from './MeterFader'
 import { subscribeReadout } from './meterStore'
 import { PanKnob } from './PanKnob'
 import { StripFrame } from './StripShell'
+import { SendsCell } from './SendsCell'
 
 
 const InputStrip = React.memo(function InputStrip({
@@ -21,6 +22,8 @@ const InputStrip = React.memo(function InputStrip({
   const faderKey = `in-${ch.id}`
   const [muted, setMuted] = useState(ch.muted)
   useEffect(() => { setMuted(ch.muted) }, [ch.muted])
+  const [toMaster, setToMaster] = useState(ch.send_to_master !== false)
+  useEffect(() => { setToMaster(ch.send_to_master !== false) }, [ch.send_to_master])
 
   // Peak text and clip colour are written straight to this node by the meter
   // store — keeping them out of props is what stops a level change from
@@ -97,41 +100,20 @@ const InputStrip = React.memo(function InputStrip({
         </button>
       </div>
 
-      {/* Row 2 — Sends */}
-      <div
-        className="flex flex-col items-center justify-center gap-1 px-1 py-1 h-full w-full bg-white/[0.05] border border-white/[0.11] rounded-sm"
-      >
-        {returnChannels.length === 0 ? (
-          <button
-            className="w-6 h-6 rounded-sm flex items-center justify-center"
-            style={{ color: RAIL_TEXT, border: `1px dashed ${FAINT}` }}
-            title="No returns"
-            disabled
-          >
-            <Plus className="w-3 h-3" />
-          </button>
-        ) : (
-          returnChannels.slice().sort((a, b) => a.order - b.order).map((ret, idx) => {
-            const letter = String.fromCharCode(65 + idx)
-            const active = sends.some(s => s.input_channel_id === ch.id && s.return_channel_id === ret.id)
-            return (
-              <button
-                key={ret.id}
-                onClick={() => invoke('toggle_send', { inputId: ch.id, returnId: ret.id, active: !active }).catch(onError)}
-                title={`Send to ${ret.name}`}
-                className="w-full text-[8px] font-bold tracking-wider uppercase py-0.5 rounded-sm transition-all"
-                style={{
-                  backgroundColor: active ? `${GREEN}22` : 'transparent',
-                  color: active ? GREEN : RAIL_TEXT,
-                  border: `1px solid ${active ? GREEN_DIM : FAINT}`,
-                }}
-              >
-                {letter}
-              </button>
-            )
-          })
-        )}
-      </div>
+      {/* Row 2 — Master chip + sends */}
+      <SendsCell
+        chId={ch.id}
+        returnChannels={returnChannels}
+        sends={sends}
+        toMaster={toMaster}
+        onToggleMaster={() => {
+          const next = !toMaster
+          setToMaster(next)
+          invoke('set_input_send_to_master', { id: ch.id, sendToMaster: next })
+            .catch(e => { setToMaster(!next); onError(e) })
+        }}
+        onError={onError}
+      />
 
       {/* Row 3 — Output/Source Select */}
       <div className="h-full w-full bg-white/[0.05] border border-white/[0.11] rounded-sm overflow-hidden flex items-center">

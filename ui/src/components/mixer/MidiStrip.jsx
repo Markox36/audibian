@@ -6,6 +6,7 @@ import { MeterFader } from './MeterFader'
 import { subscribeReadout } from './meterStore'
 import { PanKnob } from './PanKnob'
 import { StripFrame } from './StripShell'
+import { SendsCell } from './SendsCell'
 
 
 // MIDI/plugin channel strip. Same shape as InputStrip minus the source
@@ -51,41 +52,14 @@ const MidiStrip = React.memo(function MidiStrip({
         />
       </div>
 
-      {/* Row 2 — Sends */}
-      <div
-        className="flex flex-col items-center justify-center gap-1 px-1 py-1 h-full w-full bg-white/[0.05] border border-white/[0.11] rounded-sm"
-      >
-        {returnChannels.length === 0 ? (
-          <button
-            className="w-6 h-6 rounded-sm flex items-center justify-center"
-            style={{ color: RAIL_TEXT, border: `1px dashed ${FAINT}` }}
-            title="No returns"
-            disabled
-          >
-            <Plus className="w-3 h-3" />
-          </button>
-        ) : (
-          returnChannels.slice().sort((a, b) => a.order - b.order).map((ret, idx) => {
-            const letter = String.fromCharCode(65 + idx)
-            const active = sends.some(s => s.input_channel_id === ch.id && s.return_channel_id === ret.id)
-            return (
-              <button
-                key={ret.id}
-                onClick={() => invoke('toggle_send', { inputId: ch.id, returnId: ret.id, active: !active }).catch(console.error)}
-                title={`Send to ${ret.name}`}
-                className="w-full text-[8px] font-bold tracking-wider uppercase py-0.5 rounded-sm transition-all"
-                style={{
-                  backgroundColor: active ? `${GREEN}22` : 'transparent',
-                  color: active ? GREEN : RAIL_TEXT,
-                  border: `1px solid ${active ? GREEN_DIM : FAINT}`,
-                }}
-              >
-                {letter}
-              </button>
-            )
-          })
-        )}
-      </div>
+      {/* Row 2 — Master chip (no backend toggle for MIDI) + sends */}
+      <SendsCell
+        chId={ch.id}
+        returnChannels={returnChannels}
+        sends={sends}
+        toMaster={ch.send_to_master !== false}
+        onError={onError}
+      />
 
       {/* Row 3 — Plugin badge + load state, click opens the device footer */}
       <button
