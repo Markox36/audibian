@@ -2202,6 +2202,10 @@ pub fn soundboard_play(state: State<AppState>, id: u32) -> Result<(), String> {
         return Err("ffmpeg did not provide an audio stream".into());
     };
 
+    // `application.name` doubles as PulseAudio's stream-restore key, so a bare
+    // `paplay` shares one saved volume/mute with every other paplay on the
+    // machine — including the muted state Audibian itself writes when the
+    // strip is muted. Our own name keeps that state ours.
     let pap = std::process::Command::new("paplay")
         .args([
             "--device",
@@ -2210,7 +2214,9 @@ pub fn soundboard_play(state: State<AppState>, id: u32) -> Result<(), String> {
             "--format=s16le",
             "--rate=48000",
             "--channels=2",
+            "--property=application.name=audibian-soundboard",
         ])
+        .arg(format!("--property=media.name={}", sanitize_pa_value(&sound.name)))
         .stdin(ff_stdout)
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null())
@@ -2219,6 +2225,7 @@ pub fn soundboard_play(state: State<AppState>, id: u32) -> Result<(), String> {
     match pap {
         Ok(pap) => {
             state.soundboard_procs.lock().extend([ff, pap]);
+            normalise_soundboard_stream(&state);
             Ok(())
         }
         Err(e) => {
@@ -2227,6 +2234,64 @@ pub fn soundboard_play(state: State<AppState>, id: u32) -> Result<(), String> {
             Err(format!("Could not start paplay: {e}"))
         }
     }
+}
+
+/// Put the freshly started soundboard stream at unity gain and the strip's
+/// own mute state.
+///
+/// PulseAudio restores a stream's last volume and mute from disk, so one
+/// playback that happened while the strip was muted (directly or because
+/// another strip was soloed) makes *every* later playback start muted — with
+/// no error anywhere, since the pipeline itself is perfectly healthy. The
+/// strip's level lives on the sink, so the stream itself is always unity.
+fn normalise_soundboard_stream(state: &AppState) {
+    let muted = {
+        let cfg = state.mixer_config.lock().unwrap();
+        let solos = state.solo_set.lock().unwrap();
+        cfg.input_channels
+            .iter()
+            .find(|c| c.is_soundboard)
+            .map(|c| c.muted || (!solos.is_empty() && !solos.contains(&strip_key(true, c.id))))
+            .unwrap_or(false)
+    };
+
+    let Some(sink_id) = sink_name_to_id(SOUNDBOARD_SINK_NAME) else { return };
+
+    // The stream registers asynchronously; it is normally there within a few
+    // tens of milliseconds.
+    for _ in 0..20 {
+        if let Some(si) = newest_sink_input_on(sink_id) {
+            std::process::Command::new("pactl")
+                .args(["set-sink-input-volume", &si.to_string(), "100%"])
+                .spawn_detached();
+            std::process::Command::new("pactl")
+                .args(["set-sink-input-mute", &si.to_string(), if muted { "1" } else { "0" }])
+                .spawn_detached();
+            return;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(25));
+    }
+}
+
+/// Highest sink-input id currently feeding `sink_id` — ids are monotonic, so
+/// the newest stream on the soundboard sink is the one we just started.
+fn newest_sink_input_on(sink_id: u32) -> Option<u32> {
+    let out = std::process::Command::new("pactl")
+        .args(["list", "short", "sink-inputs"])
+        .output()
+        .ok()?;
+    parse_newest_sink_input(&String::from_utf8_lossy(&out.stdout), sink_id)
+}
+
+fn parse_newest_sink_input(txt: &str, sink_id: u32) -> Option<u32> {
+    txt.lines()
+        .filter_map(|line| {
+            let mut cols = line.split_whitespace();
+            let id = cols.next()?.parse::<u32>().ok()?;
+            let sink = cols.next()?.parse::<u32>().ok()?;
+            (sink == sink_id).then_some(id)
+        })
+        .max()
 }
 
 #[tauri::command(async)]
@@ -2786,5 +2851,21 @@ audibian_microfono:monitor_FR
  \t\tnode.name = \"audibian_ghost\"
 ";
         assert_eq!(parse_orphan_node_ids(nodes, &owned), vec![77]);
+    }
+
+    /// The soundboard normalises the stream it just started, picked as the
+    /// highest id on its own sink — never a stream of another strip.
+    #[test]
+    fn newest_sink_input_is_per_sink() {
+        let listing = "\
+49\t62\t48\tPipeWire\ts16le 2ch 48000Hz
+125\t62\t-\tPipeWire\tfloat32le 2ch 48000Hz
+1377\t190\t-\tPipeWire\ts16le 2ch 48000Hz
+1383\t190\t-\tPipeWire\ts16le 2ch 48000Hz
+1400\t149\t-\tPipeWire\tfloat32le 2ch 48000Hz
+";
+        assert_eq!(parse_newest_sink_input(listing, 190), Some(1383));
+        assert_eq!(parse_newest_sink_input(listing, 62), Some(125));
+        assert_eq!(parse_newest_sink_input(listing, 999), None);
     }
 }
