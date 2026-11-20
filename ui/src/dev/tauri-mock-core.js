@@ -36,7 +36,12 @@ const state = {
 const handlers = {
   get_mixer_config: () => state,
   get_solo_set: () => [],
-  get_app_config: () => ({ ui_scale: 1.0, autostart: false, low_latency: false, default_profile: null }),
+  get_app_config: () => ({ ui_scale: 1.0, autostart: false, low_latency: false, default_profile: 'Streaming' }),
+  list_profiles_info: () => [
+    { name: 'Streaming', created_at: '2026-11-17T14:03:12Z', channels: 6, links: 14 },
+    { name: 'Música', created_at: '20400d 09:10:00 UTC', channels: 4, links: 8 },
+    { name: 'Gaming', created_at: '2026-11-06T20:00:00Z', channels: 5, links: 11 },
+  ],
   get_graph: () => ({ nodes: {}, ports: {}, links: {} }),
 }
 
