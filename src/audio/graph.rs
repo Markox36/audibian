@@ -145,35 +145,6 @@ impl AudioGraph {
             .filter(|p| p.direction == Direction::Input)
             .collect()
     }
-
-    /// Audio-only nodes sorted: sources first, then filters, then sinks
-    pub fn audio_nodes_sorted(&self) -> Vec<&AudioNode> {
-        let mut nodes: Vec<&AudioNode> = self
-            .nodes
-            .values()
-            .filter(|n| {
-                // Only show nodes with a recognised audio media.class
-                // (excludes internal PW nodes like Dummy-Driver/Freewheel-Driver)
-                n.media_class
-                    .as_deref()
-                    .map(|c| c.starts_with("Audio") || c.starts_with("Stream"))
-                    .unwrap_or(false)
-            })
-            .collect();
-        nodes.sort_by(|a, b| {
-            let order = |n: &AudioNode| match n.node_type {
-                NodeType::Source => 0,
-                NodeType::Filter => 1,
-                NodeType::Duplex => 2,
-                NodeType::Sink => 3,
-                NodeType::Unknown => 4,
-            };
-            order(a)
-                .cmp(&order(b))
-                .then(a.display_name().cmp(b.display_name()))
-        });
-        nodes
-    }
 }
 
 /// Parse a `media.class` property string into a NodeType.

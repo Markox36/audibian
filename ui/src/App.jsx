@@ -43,80 +43,80 @@ export default function App() {
       })
     }).catch(console.error)
 
-    const unlisten = []
+    const subs = Promise.all([
 
-    listen('pw-node-added', e => {
-      setGraph(prev => {
-        const nodes = prev.nodes.filter(n => n.id !== e.payload.id)
-        nodes.push(e.payload)
-        return { ...prev, nodes }
-      })
-    }).then(u => unlisten.push(u))
+      listen('pw-node-added', e => {
+        setGraph(prev => {
+          const nodes = prev.nodes.filter(n => n.id !== e.payload.id)
+          nodes.push(e.payload)
+          return { ...prev, nodes }
+        })
+      }),
 
-    listen('pw-node-removed', e => {
-      const id = e.payload
-      setGraph(prev => ({
-        nodes: prev.nodes.filter(n => n.id !== id),
-        ports: prev.ports.filter(p => p.node_id !== id),
-        links: prev.links.filter(l => l.output_node_id !== id && l.input_node_id !== id),
-      }))
-    }).then(u => unlisten.push(u))
+      listen('pw-node-removed', e => {
+        const id = e.payload
+        setGraph(prev => ({
+          nodes: prev.nodes.filter(n => n.id !== id),
+          ports: prev.ports.filter(p => p.node_id !== id),
+          links: prev.links.filter(l => l.output_node_id !== id && l.input_node_id !== id),
+        }))
+      }),
 
-    listen('pw-port-added', e => {
-      setGraph(prev => {
-        const ports = prev.ports.filter(p => p.id !== e.payload.id)
-        ports.push(e.payload)
-        return { ...prev, ports }
-      })
-    }).then(u => unlisten.push(u))
+      listen('pw-port-added', e => {
+        setGraph(prev => {
+          const ports = prev.ports.filter(p => p.id !== e.payload.id)
+          ports.push(e.payload)
+          return { ...prev, ports }
+        })
+      }),
 
-    listen('pw-port-removed', e => {
-      const id = e.payload
-      setGraph(prev => ({
-        ...prev,
-        ports: prev.ports.filter(p => p.id !== id),
-        links: prev.links.filter(l => l.output_port_id !== id && l.input_port_id !== id),
-      }))
-    }).then(u => unlisten.push(u))
+      listen('pw-port-removed', e => {
+        const id = e.payload
+        setGraph(prev => ({
+          ...prev,
+          ports: prev.ports.filter(p => p.id !== id),
+          links: prev.links.filter(l => l.output_port_id !== id && l.input_port_id !== id),
+        }))
+      }),
 
-    listen('pw-link-added', e => {
-      setGraph(prev => {
-        const links = prev.links.filter(l => l.id !== e.payload.id)
-        links.push(e.payload)
-        return { ...prev, links }
-      })
-    }).then(u => unlisten.push(u))
+      listen('pw-link-added', e => {
+        setGraph(prev => {
+          const links = prev.links.filter(l => l.id !== e.payload.id)
+          links.push(e.payload)
+          return { ...prev, links }
+        })
+      }),
 
-    listen('pw-link-removed', e => {
-      const id = e.payload
-      setGraph(prev => ({
-        ...prev,
-        links: prev.links.filter(l => l.id !== id),
-      }))
-    }).then(u => unlisten.push(u))
+      listen('pw-link-removed', e => {
+        const id = e.payload
+        setGraph(prev => ({
+          ...prev,
+          links: prev.links.filter(l => l.id !== id),
+        }))
+      }),
 
-    listen('pw-disconnected', () => {
-      setPwConnected(false)
-    }).then(u => unlisten.push(u))
+      listen('pw-disconnected', () => {
+        setPwConnected(false)
+      }),
 
-    listen('pw-node-volume', e => {
-      const { node_id, volume, muted } = e.payload
-      setGraph(prev => ({
-        ...prev,
-        nodes: prev.nodes.map(n => n.id === node_id ? { ...n, volume, muted } : n),
-      }))
-    }).then(u => unlisten.push(u))
+      listen('pw-node-volume', e => {
+        const { node_id, volume, muted } = e.payload
+        setGraph(prev => ({
+          ...prev,
+          nodes: prev.nodes.map(n => n.id === node_id ? { ...n, volume, muted } : n),
+        }))
+      }),
+    ])
 
-    return () => unlisten.forEach(u => u())
+    return () => { subs.then(us => us.forEach(u => u())) }
   }, [])
 
-  const handleCreateLink = (outputPortId, inputPortId) => {
-    invoke('create_link', { outputPortId, inputPortId }).catch(console.error)
-  }
+  // Return the promise: Matrix persists the expected link set only once the
+  // graph change actually went through.
+  const handleCreateLink = (outputPortId, inputPortId) =>
+    invoke('create_link', { outputPortId, inputPortId })
 
-  const handleDestroyLink = (linkId) => {
-    invoke('destroy_link', { linkId }).catch(console.error)
-  }
+  const handleDestroyLink = (linkId) => invoke('destroy_link', { linkId })
 
   const tabs = [
     { id: 'matrix', label: 'Matrix' },

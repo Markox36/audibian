@@ -21,6 +21,7 @@ export default function Soundboard() {
   const [renaming, setRenaming] = useState(null) // { id, value }
   const [trimming, setTrimming] = useState(null) // { id, start, end }
   const [adding, setAdding] = useState(false)
+  const [playError, setPlayError] = useState('')
   // Poll while there are sounds without a duration yet (background probe).
   const pollRef = useRef(null)
 
@@ -65,8 +66,13 @@ export default function Soundboard() {
     }
   }
 
-  const handlePlay = (id) => {
-    invoke('soundboard_play', { id }).catch(console.error)
+  const handlePlay = async (id) => {
+    setPlayError('')
+    try {
+      await invoke('soundboard_play', { id })
+    } catch (error) {
+      setPlayError(String(error))
+    }
   }
 
   const handleStopAll = () => {
@@ -161,6 +167,14 @@ export default function Soundboard() {
           </button>
         </div>
       </div>
+      {playError && (
+        <div
+          role="alert"
+          className="mx-4 mt-2 rounded-sm border border-[#ff6b6e]/40 bg-[#ff6b6e]/10 px-3 py-2 text-[10px] text-[#ff9b9d]"
+        >
+          Playback failed: {playError}
+        </div>
+      )}
 
       {/* Grid */}
       <div className="flex-1 overflow-y-auto p-4">

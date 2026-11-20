@@ -15,7 +15,7 @@ use crate::state::AppState;
 // Graph
 // ---------------------------------------------------------------------------
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn get_graph(state: State<AppState>) -> serde_json::Value {
     let graph = state.graph.lock().unwrap();
     let nodes: Vec<&crate::audio::graph::AudioNode> = graph.nodes.values().collect();
@@ -32,12 +32,12 @@ pub fn get_graph(state: State<AppState>) -> serde_json::Value {
 // Links
 // ---------------------------------------------------------------------------
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn create_link(state: State<AppState>, output_port_id: u32, input_port_id: u32) {
     state.pw.create_link(output_port_id, input_port_id);
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn destroy_link(state: State<AppState>, link_id: u32) {
     state.pw.destroy_link(link_id);
 }
@@ -46,7 +46,7 @@ pub fn destroy_link(state: State<AppState>, link_id: u32) {
 // EQ
 // ---------------------------------------------------------------------------
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn start_eq(state: State<AppState>, target_sink: String, bands: Vec<EqBand>, sample_rate: u32) {
     let mut eq = state.eq_instance.lock().unwrap();
     // Drop existing instance first
@@ -54,13 +54,13 @@ pub fn start_eq(state: State<AppState>, target_sink: String, bands: Vec<EqBand>,
     *eq = effects::start_eq(&target_sink, &bands, sample_rate);
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn stop_eq(state: State<AppState>) {
     let mut eq = state.eq_instance.lock().unwrap();
     *eq = None;
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn get_eq_target(state: State<AppState>) -> Option<String> {
     state.eq_instance.lock().unwrap()
         .as_ref()
@@ -71,7 +71,7 @@ pub fn get_eq_target(state: State<AppState>) -> Option<String> {
 // Noise Suppression
 // ---------------------------------------------------------------------------
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn start_ns(state: State<AppState>, source_name: String) {
     let mut ns = state.ns_instances.lock().unwrap();
     if !ns.contains_key(&source_name) {
@@ -81,13 +81,13 @@ pub fn start_ns(state: State<AppState>, source_name: String) {
     }
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn stop_ns(state: State<AppState>, source_name: String) {
     let mut ns = state.ns_instances.lock().unwrap();
     ns.remove(&source_name);
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn get_ns_active(state: State<AppState>) -> Vec<String> {
     state.ns_instances.lock().unwrap().keys().cloned().collect()
 }
@@ -96,27 +96,27 @@ pub fn get_ns_active(state: State<AppState>) -> Vec<String> {
 // Profiles
 // ---------------------------------------------------------------------------
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn list_profiles(state: State<AppState>) -> Vec<String> {
     state.profile_store.lock().unwrap().list()
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn load_profile(state: State<AppState>, name: String) -> Option<AudioProfile> {
     state.profile_store.lock().unwrap().load(&name)
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn save_profile(state: State<AppState>, profile: AudioProfile) -> bool {
     state.profile_store.lock().unwrap().save(&profile)
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn delete_profile(state: State<AppState>, name: String) -> bool {
     state.profile_store.lock().unwrap().delete(&name)
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn apply_profile_cmd(state: State<AppState>, name: String) -> usize {
     let store = state.profile_store.lock().unwrap();
     let profile = match store.load(&name) {
@@ -140,7 +140,7 @@ pub fn apply_profile_cmd(state: State<AppState>, name: String) -> usize {
     result.links_applied
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn snapshot_profile_cmd(state: State<AppState>, name: String) -> bool {
     let graph = state.graph.lock().unwrap();
     let mut profile = crate::profiles::apply::snapshot_profile(&name, &graph);
@@ -157,7 +157,6 @@ fn apply_mixer_snapshot_runtime(state: &AppState) {
     let cfg = state.mixer_config.lock().unwrap().clone();
     let solos = state.solo_set.lock().unwrap().clone();
     let any_solo = !solos.is_empty();
-
     for ch in &cfg.input_channels {
         let key = strip_key(true, ch.id);
         let eff = ch.muted || (any_solo && !solos.contains(&key));
@@ -182,14 +181,15 @@ fn apply_mixer_snapshot_runtime(state: &AppState) {
 // App config
 // ---------------------------------------------------------------------------
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn get_app_config(_state: State<AppState>) -> AppConfig {
     AppConfig::load()
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn save_app_config(_state: State<AppState>, config: AppConfig) {
     config.save();
+    config.apply_autostart();
     apply_low_latency_conf(config.low_latency);
 }
 
@@ -217,12 +217,12 @@ context.properties = {\n\
 // Mixer
 // ---------------------------------------------------------------------------
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn get_mixer_config(state: State<AppState>) -> crate::mixer::MixerConfig {
     state.mixer_config.lock().unwrap().clone()
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn add_input_channel(state: State<AppState>, name: String) {
     let (id, sink_name, all_channels) = {
         let mut cfg = state.mixer_config.lock().unwrap();
@@ -232,7 +232,11 @@ pub fn add_input_channel(state: State<AppState>, name: String) {
             .chars()
             .map(|c| if c.is_alphanumeric() { c } else { '_' })
             .collect();
-        let sink_name = format!("audibian_{}", slug);
+        // Suffix with the id: "Music", "music" and "Music!" all slugify to
+        // the same string, pactl would then create `audibian_music.2` while
+        // mixer.toml still claims `audibian_music`, and routing, metering
+        // and removal would all address the wrong sink.
+        let sink_name = format!("audibian_{slug}_{id}");
         cfg.input_channels.push(InputChannel {
             id,
             name: name.clone(),
@@ -267,7 +271,7 @@ pub fn add_input_channel(state: State<AppState>, name: String) {
     }
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn add_return_channel(state: State<AppState>, name: Option<String>) {
     let (id, sink_name, display_name) = {
         let mut cfg = state.mixer_config.lock().unwrap();
@@ -309,7 +313,7 @@ pub fn add_return_channel(state: State<AppState>, name: Option<String>) {
     // Meter starts reactively in handle_pw_event when the ".monitor" node appears.
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn remove_input_channel(state: State<AppState>, id: u32) {
     // Refuse to delete the soundboard strip — it is auto-provisioned at
     // startup and removing it would break soundboard playback routing.
@@ -358,7 +362,7 @@ pub fn remove_input_channel(state: State<AppState>, id: u32) {
     write_pipewire_conf(&all_channels);
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn remove_return_channel(state: State<AppState>, id: u32) {
     // Drop meter before unloading the sink
     let sink_name = state.mixer_config.lock().unwrap()
@@ -373,13 +377,30 @@ pub fn remove_return_channel(state: State<AppState>, id: u32) {
             unload_module(mid);
         }
     }
+
+    // Sends feeding this return are loopback modules of their own. Without
+    // this they stay loaded pointing at a sink that no longer exists, for
+    // the rest of the session and across restarts.
+    {
+        let mut send_mods = state.send_module_ids.lock().unwrap();
+        let keys: Vec<(u32, u32)> = send_mods
+            .keys()
+            .filter(|(_, ret)| *ret == id)
+            .cloned()
+            .collect();
+        for key in keys {
+            if let Some(mid) = send_mods.remove(&key) {
+                unload_module(mid);
+            }
+        }
+    }
     let mut cfg = state.mixer_config.lock().unwrap();
     cfg.sends.retain(|s| s.return_channel_id != id);
     cfg.return_channels.retain(|r| r.id != id);
     cfg.save();
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn update_input_channel_name(state: State<AppState>, id: u32, name: String) {
     let all_channels = {
         let mut cfg = state.mixer_config.lock().unwrap();
@@ -392,7 +413,7 @@ pub fn update_input_channel_name(state: State<AppState>, id: u32, name: String) 
     write_pipewire_conf(&all_channels);
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn update_return_channel_name(state: State<AppState>, id: u32, name: String) {
     let sink_name = {
         let mut cfg = state.mixer_config.lock().unwrap();
@@ -407,16 +428,18 @@ pub fn update_return_channel_name(state: State<AppState>, id: u32, name: String)
     if let Some(sink) = sink_name {
         let src_name = format!("{}_src", sink);
         let monitor = format!("{}.monitor", sink);
-        let mut ids = state.mixer_module_ids.lock().unwrap();
-        if let Some(mods) = ids.get_mut(&id) {
-            if mods.len() > 1 {
-                // Unload old remap-source
-                std::process::Command::new("pactl")
-                    .args(["unload-module", &mods[1].to_string()])
-                    .spawn_detached();
-            }
-            // Create new remap-source with updated description
-            if let Some(mid) = create_remap_source(&monitor, &src_name, &name) {
+        // The lock is released before the blocking pactl calls: holding it
+        // across them stalls every other channel operation behind a
+        // subprocess round trip.
+        let old = state.mixer_module_ids.lock().unwrap()
+            .get(&id)
+            .and_then(|mods| mods.get(1).copied());
+        if let Some(old) = old {
+            unload_module(old);
+        }
+        if let Some(mid) = create_remap_source(&monitor, &src_name, &name) {
+            let mut ids = state.mixer_module_ids.lock().unwrap();
+            if let Some(mods) = ids.get_mut(&id) {
                 if mods.len() > 1 { mods[1] = mid; } else { mods.push(mid); }
             }
         }
@@ -424,7 +447,7 @@ pub fn update_return_channel_name(state: State<AppState>, id: u32, name: String)
 }
 
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn toggle_send(state: State<AppState>, input_id: u32, return_id: u32, active: bool) {
     let (input_sink, ret_sink) = {
         let mut cfg = state.mixer_config.lock().unwrap();
@@ -465,7 +488,7 @@ pub fn toggle_send(state: State<AppState>, input_id: u32, return_id: u32, active
     }
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn set_strip_volume(state: State<AppState>, id: u32, is_input: bool, volume: f32) {
     let sink_info = {
         let mut cfg = state.mixer_config.lock().unwrap();
@@ -500,7 +523,7 @@ pub fn set_strip_volume(state: State<AppState>, id: u32, is_input: bool, volume:
     }
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn set_strip_pan(state: State<AppState>, id: u32, is_input: bool, pan: f32) {
     let info = {
         let mut cfg = state.mixer_config.lock().unwrap();
@@ -529,7 +552,7 @@ pub fn set_strip_pan(state: State<AppState>, id: u32, is_input: bool, pan: f32) 
     }
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn set_strip_mute(state: State<AppState>, id: u32, is_input: bool, muted: bool) {
     let info = {
         let mut cfg = state.mixer_config.lock().unwrap();
@@ -558,7 +581,7 @@ pub fn set_strip_mute(state: State<AppState>, id: u32, is_input: bool, muted: bo
     }
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn set_strip_solo(state: State<AppState>, id: u32, is_input: bool, solo: bool) {
     let key = strip_key(is_input, id);
     {
@@ -568,7 +591,7 @@ pub fn set_strip_solo(state: State<AppState>, id: u32, is_input: bool, solo: boo
     reapply_solo_mutes(&state);
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn get_solo_set(state: State<AppState>) -> Vec<String> {
     state.solo_set.lock().unwrap().iter().cloned().collect()
 }
@@ -585,7 +608,7 @@ fn midi_strip_key(id: u32) -> String {
     format!("midi:{}", id)
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn midi_channel_set_volume(state: State<AppState>, id: u32, volume: f32) {
     let info = {
         let mut cfg = state.mixer_config.lock().unwrap();
@@ -598,7 +621,7 @@ pub fn midi_channel_set_volume(state: State<AppState>, id: u32, volume: f32) {
     apply_strip_pactl(&info.0, info.1, info.2, info.3);
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn midi_channel_set_pan(state: State<AppState>, id: u32, pan: f32) {
     let info = {
         let mut cfg = state.mixer_config.lock().unwrap();
@@ -611,7 +634,7 @@ pub fn midi_channel_set_pan(state: State<AppState>, id: u32, pan: f32) {
     apply_strip_pactl(&info.0, info.1, info.2, info.3);
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn midi_channel_set_mute(state: State<AppState>, id: u32, muted: bool) {
     let info = {
         let mut cfg = state.mixer_config.lock().unwrap();
@@ -627,7 +650,7 @@ pub fn midi_channel_set_mute(state: State<AppState>, id: u32, muted: bool) {
     apply_strip_pactl(&info.0, info.1, info.2, effective_mute);
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn midi_channel_set_solo(state: State<AppState>, id: u32, solo: bool) {
     let key = midi_strip_key(id);
     {
@@ -637,7 +660,7 @@ pub fn midi_channel_set_solo(state: State<AppState>, id: u32, solo: bool) {
     reapply_solo_mutes(&state);
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn set_master_volume(state: State<AppState>, volume: f32) {
     let (fader, pan, muted) = {
         let mut cfg = state.mixer_config.lock().unwrap();
@@ -648,7 +671,7 @@ pub fn set_master_volume(state: State<AppState>, volume: f32) {
     apply_strip_pactl(MASTER_SINK_NAME, fader, pan, muted);
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn set_master_pan(state: State<AppState>, pan: f32) {
     let (fader, p, muted) = {
         let mut cfg = state.mixer_config.lock().unwrap();
@@ -659,7 +682,7 @@ pub fn set_master_pan(state: State<AppState>, pan: f32) {
     apply_strip_pactl(MASTER_SINK_NAME, fader, p, muted);
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn set_master_mute(state: State<AppState>, muted: bool) {
     let (fader, pan, m) = {
         let mut cfg = state.mixer_config.lock().unwrap();
@@ -670,7 +693,7 @@ pub fn set_master_mute(state: State<AppState>, muted: bool) {
     apply_strip_pactl(MASTER_SINK_NAME, fader, pan, m);
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn set_send_level(state: State<AppState>, input_id: u32, return_id: u32, level: f32) {
     {
         let mut cfg = state.mixer_config.lock().unwrap();
@@ -683,7 +706,7 @@ pub fn set_send_level(state: State<AppState>, input_id: u32, return_id: u32, lev
     }
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn set_master_sink(state: State<AppState>, sink_name: Option<String>) {
     // Persist new hw output choice first; everything else recreates around it.
     {
@@ -712,17 +735,17 @@ pub fn set_master_sink(state: State<AppState>, sink_name: Option<String>) {
     }
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn set_volume(node_name: String, volume: f64) {
     set_volume_pactl(&node_name, volume);
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn set_mute(node_name: String, muted: bool) {
     set_mute_pactl(&node_name, muted);
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn set_input_source(state: State<AppState>, id: u32, source_name: Option<String>) {
     let (sink_name, mono) = {
         let mut cfg = state.mixer_config.lock().unwrap();
@@ -751,7 +774,7 @@ pub fn set_input_source(state: State<AppState>, id: u32, source_name: Option<Str
     }
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn set_input_mono(state: State<AppState>, id: u32, mono: bool) {
     let (source_name, sink_name) = {
         let mut cfg = state.mixer_config.lock().unwrap();
@@ -779,7 +802,7 @@ pub fn set_input_mono(state: State<AppState>, id: u32, mono: bool) {
     }
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn set_return_send_to_master(state: State<AppState>, id: u32, _send_to_master: bool) {
     // Returns are not allowed to route to the master bus. Keep the flag off
     // in config and tear down any stale loopback if one exists.
@@ -799,7 +822,7 @@ pub fn set_return_send_to_master(state: State<AppState>, id: u32, _send_to_maste
     }
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn set_input_send_to_master(state: State<AppState>, id: u32, send_to_master: bool) {
     let input_sink = {
         let mut cfg = state.mixer_config.lock().unwrap();
@@ -820,7 +843,7 @@ pub fn set_input_send_to_master(state: State<AppState>, id: u32, send_to_master:
     }
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn reorder_channels(
     state: State<AppState>,
     input_order: Vec<u32>,
@@ -840,7 +863,7 @@ pub fn reorder_channels(
     cfg.save();
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn set_channel_color(
     state: State<AppState>,
     id: u32,
@@ -860,7 +883,7 @@ pub fn set_channel_color(
     cfg.save();
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn set_global_scale(state: State<AppState>, scale: f32) {
     let mut cfg = state.mixer_config.lock().unwrap();
     cfg.global_scale = scale.clamp(0.5, 2.5);
@@ -937,7 +960,7 @@ fn regenerate_input_routing(state: &AppState, ch_id: u32) {
     }
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn set_strip_eq(
     state: State<AppState>,
     id: u32,
@@ -973,85 +996,14 @@ pub fn set_strip_eq(
         }
     }
 
-    // Wait for the filter-chain source to register, then relink.
-    let mixer_cfg = state.mixer_config.clone();
-    let send_ids = state.send_module_ids.clone();
-    let graph_ref = state.graph.clone();
-    let pw_ref = state.pw.clone();
-    let was_enabled = eq.enabled;
-    std::thread::spawn(move || {
-        if was_enabled {
-            std::thread::sleep(std::time::Duration::from_millis(400));
-        }
-        let cfg = mixer_cfg.lock().unwrap().clone();
-        let ch = match cfg.input_channels.iter().find(|c| c.id == id) {
-            Some(c) => c.clone(),
-            None => return,
-        };
-        let source_name = input_source_for(&ch);
-        let sends: Vec<(u32, String, f32)> = cfg.sends.iter()
-            .filter(|s| s.input_channel_id == id)
-            .filter_map(|s| {
-                let ret = cfg.return_channels.iter().find(|r| r.id == s.return_channel_id)?;
-                Some((s.return_channel_id, ret.sink_name.clone(), s.level))
-            })
-            .collect();
-
-        {
-            let mut send_mods = send_ids.lock().unwrap();
-            let keys: Vec<(u32, u32)> = send_mods.keys()
-                .filter(|(inp, _)| *inp == id).cloned().collect();
-            for key in keys {
-                if let Some(mid) = send_mods.remove(&key) {
-                    std::process::Command::new("pactl")
-                        .args(["unload-module", &mid.to_string()])
-                        .spawn_detached();
-                }
-            }
-        }
-        {
-            let graph = graph_ref.lock().unwrap();
-            let eq_source = crate::audio::strip_eq::StripEqInstance::source_name_for(&ch.sink_name);
-            disconnect_nodes(&graph, &ch.sink_name, MASTER_SINK_NAME, &pw_ref);
-            disconnect_nodes(&graph, &eq_source, MASTER_SINK_NAME, &pw_ref);
-        }
-        for (ret_id, ret_sink, level) in sends {
-            if let Some(mid) = create_loopback(&source_name, &ret_sink) {
-                if (level - 1.0).abs() > f32::EPSILON {
-                    set_loopback_volume(mid, level);
-                }
-                send_ids.lock().unwrap().insert((id, ret_id), mid);
-            }
-        }
-        if ch.send_to_master {
-            let graph = graph_ref.lock().unwrap();
-            connect_nodes(&graph, &source_name, MASTER_SINK_NAME, &pw_ref, false);
-        }
-    });
-
-    let _ = regenerate_input_routing;
-}
-
-// ---------------------------------------------------------------------------
-// Internal: restore mixer sends on startup via module-loopback
-// ---------------------------------------------------------------------------
-
-pub fn restore_mixer_sends(
-    cfg: &crate::mixer::MixerConfig,
-    send_module_ids: &std::sync::Arc<std::sync::Mutex<std::collections::HashMap<(u32, u32), u32>>>,
-) {
-    for send in &cfg.sends {
-        let src = cfg.input_channels.iter().find(|c| c.id == send.input_channel_id);
-        let dst = cfg.return_channels.iter().find(|r| r.id == send.return_channel_id);
-        if let (Some(inp), Some(ret)) = (src, dst) {
-            let monitor = format!("{}.monitor", inp.sink_name);
-            if let Some(mid) = create_loopback(&monitor, &ret.sink_name) {
-                send_module_ids.lock().unwrap().insert((inp.id, ret.id), mid);
-            }
-        }
+    // The filter-chain's virtual source needs a moment to register before
+    // anything can link to it. This command runs off the main thread, so
+    // waiting here beats duplicating the whole relink in a spawned thread.
+    if eq.enabled {
+        std::thread::sleep(std::time::Duration::from_millis(400));
     }
+    regenerate_input_routing(&state, id);
 }
-
 
 // ---------------------------------------------------------------------------
 // PipeWire link helpers
@@ -1083,6 +1035,65 @@ pub(crate) fn connect_nodes(graph: &AudioGraph, src_name: &str, dst_name: &str, 
             }
         }
     }
+}
+
+fn pw_link_list_has_edge(listing: &str, output_port: &str, input_port: &str) -> bool {
+    let mut matching_output = false;
+    for line in listing.lines() {
+        let line = line.trim();
+        if let Some(target) = line.strip_prefix("|->") {
+            if matching_output && target.trim() == input_port {
+                return true;
+            }
+        } else if !line.starts_with("|<-") {
+            matching_output = line == output_port;
+        }
+    }
+    false
+}
+
+fn pw_link_exists(output_port: &str, input_port: &str) -> bool {
+    let Ok(out) = std::process::Command::new("pw-link")
+        .args(["-l", output_port])
+        .output()
+    else {
+        return false;
+    };
+    out.status.success()
+        && pw_link_list_has_edge(
+            &String::from_utf8_lossy(&out.stdout),
+            output_port,
+            input_port,
+        )
+}
+
+fn ensure_pw_link(output_port: &str, input_port: &str) -> bool {
+    if pw_link_exists(output_port, input_port) {
+        return true;
+    }
+    let created = std::process::Command::new("pw-link")
+        .args(["-w", output_port, input_port])
+        .status()
+        .is_ok_and(|status| status.success());
+    created && pw_link_exists(output_port, input_port)
+}
+
+pub(crate) fn connect_monitor_to_master(sink: &str) {
+    let output_left = format!("{sink}:monitor_FL");
+    let output_right = format!("{sink}:monitor_FR");
+    let input_left = format!("{MASTER_SINK_NAME}:playback_FL");
+    let input_right = format!("{MASTER_SINK_NAME}:playback_FR");
+
+    for _ in 0..80 {
+        if ensure_pw_link(&output_left, &input_left)
+            && ensure_pw_link(&output_right, &input_right)
+        {
+            return;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
+
+    log::warn!("Could not restore monitor route for '{sink}' to {MASTER_SINK_NAME}");
 }
 
 /// True when `name` is one of the mixer's own sinks (a strip, a return bus or
@@ -1280,7 +1291,7 @@ pub fn pick_strip_sink_for_app(
         .map(|c| c.sink_name.clone())
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn move_app_to_strip(stream_id: u32, sink_name: String) {
     move_stream_to_sink(stream_id, &sink_name);
 }
@@ -1327,25 +1338,53 @@ fn list_sink_inputs() -> Vec<(u32, String, Option<u32>, Option<u32>)> {
     result
 }
 
-/// Resolve a sink name (`audibian_xxx`) to its current pactl sink id, if alive.
-fn sink_name_to_id(name: &str) -> Option<u32> {
-    let out = std::process::Command::new("pactl").args(["list", "short", "sinks"]).output().ok()?;
-    let text = String::from_utf8_lossy(&out.stdout);
-    for line in text.lines() {
+/// Sink name → pactl sink id, as of the last `pactl list short sinks`.
+/// Resolving a name costs a subprocess round trip and the fader, pan and
+/// mute paths hit it on every event, so the map is cached and invalidated
+/// from the PipeWire event bridge whenever a node appears or disappears.
+static SINK_IDS: std::sync::Mutex<Option<std::collections::HashMap<String, u32>>> =
+    std::sync::Mutex::new(None);
+
+pub fn invalidate_sink_id_cache() {
+    if let Ok(mut guard) = SINK_IDS.lock() {
+        *guard = None;
+    }
+}
+
+fn read_sink_ids() -> std::collections::HashMap<String, u32> {
+    let mut map = std::collections::HashMap::new();
+    let Ok(out) = std::process::Command::new("pactl")
+        .args(["list", "short", "sinks"])
+        .output()
+    else { return map };
+    let txt = String::from_utf8_lossy(&out.stdout);
+    for line in txt.lines() {
         let mut cols = line.split_whitespace();
-        let id = cols.next()?.parse::<u32>().ok()?;
-        let sink_name = cols.next()?;
-        if sink_name == name {
-            return Some(id);
+        let (Some(id), Some(name)) = (cols.next(), cols.next()) else { continue };
+        if let Ok(id) = id.parse::<u32>() {
+            map.insert(name.to_string(), id);
         }
     }
-    None
+    map
+}
+
+/// Resolve a sink name (`audibian_xxx`) to its current pactl sink id, if alive.
+fn sink_name_to_id(name: &str) -> Option<u32> {
+    let mut guard = SINK_IDS.lock().ok()?;
+    if let Some(id) = guard.as_ref().and_then(|m| m.get(name)).copied() {
+        return Some(id);
+    }
+    // Miss: the sink may have appeared since the last refresh.
+    let fresh = read_sink_ids();
+    let id = fresh.get(name).copied();
+    *guard = Some(fresh);
+    id
 }
 
 /// Reroute every existing app playback stream that is NOT already pointed at
 /// one of our virtual sinks. Used at startup so apps that were already playing
 /// (Spotify, browser, etc.) don't stay stuck on the old default sink.
-#[tauri::command]
+#[tauri::command(async)]
 pub fn reroute_existing_streams(state: State<AppState>) -> usize {
     let cfg = state.mixer_config.lock().unwrap().clone();
 
@@ -1383,7 +1422,7 @@ pub fn reroute_existing_streams(state: State<AppState>) -> usize {
     moved
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn set_input_match_rules(state: State<AppState>, id: u32, rules: Vec<String>) {
     let mut cfg = state.mixer_config.lock().unwrap();
     if let Some(c) = cfg.input_channels.iter_mut().find(|c| c.id == id) {
@@ -1392,7 +1431,7 @@ pub fn set_input_match_rules(state: State<AppState>, id: u32, rules: Vec<String>
     cfg.save();
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn set_input_is_default(state: State<AppState>, id: u32, is_default: bool) {
     let mut cfg = state.mixer_config.lock().unwrap();
     // Only one strip can be default at a time.
@@ -1409,6 +1448,48 @@ pub fn set_input_is_default(state: State<AppState>, id: u32, is_default: bool) {
 // ---------------------------------------------------------------------------
 // Master null-sink helpers
 // ---------------------------------------------------------------------------
+
+/// Tear down everything Audibian owns before `app.exit`, which runs no
+/// destructors: without this the filter-chain EQ and noise-suppression
+/// processes keep running, soundboard playback keeps sounding, and a strip
+/// left soloed stays muted at the sink level with no UI left to unmute it.
+pub fn shutdown(state: &AppState) {
+    // Solo mutes the *other* strips through pactl, and those modules outlive
+    // the GUI by design (`--apply-persistent`), so clear it first and push
+    // the un-muted state back out.
+    let had_solo = {
+        let mut solos = state.solo_set.lock().unwrap();
+        let had = !solos.is_empty();
+        solos.clear();
+        had
+    };
+    if had_solo {
+        reapply_solo_mutes(state);
+    }
+
+    for (_, handle) in state.midi_plugin_hosts.lock().unwrap().drain() {
+        handle.stop();
+    }
+    // Dropping the handle stops and joins the MIDI input thread.
+    state.midi_input_router.lock().unwrap().take();
+
+    // Each of these owns a `pipewire -c` child that its `Drop` kills.
+    state.strip_eq_instances.lock().unwrap().clear();
+    *state.eq_instance.lock().unwrap() = None;
+    state.ns_instances.lock().unwrap().clear();
+    state.meter_handles.lock().unwrap().clear();
+
+    {
+        let mut procs = state.soundboard_procs.lock();
+        for child in procs.iter_mut() {
+            let _ = child.kill();
+            let _ = child.wait();
+        }
+        procs.clear();
+    }
+
+    cleanup_stale_modules();
+}
 
 /// Internal node name of the master bus (audibian_master).
 /// All strips with send_to_master loopback into this sink; its monitor is then
@@ -1441,38 +1522,60 @@ pub fn destroy_master_modules(state: &AppState) {
 
 pub fn cleanup_stale_modules() {
     let Ok(out) = std::process::Command::new("pactl")
-        .args(["list", "modules", "short"])
+        .args(["list", "short", "modules"])
         .output()
     else { return };
 
     let stdout = String::from_utf8_lossy(&out.stdout);
     for line in stdout.lines() {
-        let is_stale =
-            ((line.contains("module-null-sink") || line.contains("module-remap-source"))
-                && (line.contains("audibian_return") || line.contains("audibian_")))
-            || (line.contains("module-loopback") && line.contains("audibian_"));
-        if is_stale {
-            if let Some(id_str) = line.split('\t').next() {
-                if let Ok(id) = id_str.trim().parse::<u32>() {
-                    std::process::Command::new("pactl")
-                        .args(["unload-module", &id.to_string()])
-                        .spawn_detached();
+        let is_stale = (line.contains("module-null-sink")
+            || line.contains("module-remap-source")
+            || line.contains("module-loopback"))
+            && line.contains("audibian_");
+        if !is_stale {
+            continue;
+        }
+        let Some(id_str) = line.split('\t').next() else { continue };
+        let Ok(id) = id_str.trim().parse::<u32>() else { continue };
+        // Blocking on purpose: the orphan sweep below must not race the
+        // unloads, and the old fixed 150 ms sleep was both slower and
+        // unreliable under load.
+        let _ = std::process::Command::new("pactl")
+            .args(["unload-module", &id.to_string()])
+            .status();
+    }
+
+    // Destroy `audibian_*` PipeWire nodes no module owns. These come from
+    // legacy static `~/.config/pipewire/pipewire.conf.d/audibian-inputs.conf`
+    // drop-ins: they survive `unload-module` because pipewire created them
+    // directly from context.objects, not via pactl. Apps then resolve the
+    // `audibian_*` name to the lowest-id ghost and audio dead-ends there,
+    // because matrix links only target the runtime sinks we just recreated.
+    destroy_orphan_audibian_nodes();
+}
+
+/// Sink/source names still claimed by a loaded pactl module. Nodes backing
+/// these are owned and must survive the orphan sweep.
+fn module_owned_node_names() -> std::collections::HashSet<String> {
+    let Ok(out) = std::process::Command::new("pactl")
+        .args(["list", "short", "modules"])
+        .output()
+    else { return std::collections::HashSet::new() };
+    parse_module_owned_names(&String::from_utf8_lossy(&out.stdout))
+}
+
+fn parse_module_owned_names(txt: &str) -> std::collections::HashSet<String> {
+    let mut owned = std::collections::HashSet::new();
+    for line in txt.lines() {
+        for tok in line.split_whitespace() {
+            for key in ["sink_name=", "source_name=", "sink=", "source="] {
+                if let Some(name) = tok.strip_prefix(key) {
+                    owned.insert(name.trim_matches('"').to_string());
                 }
             }
         }
     }
-
-    // Give pactl a moment to tear nodes down before scanning for orphans.
-    std::thread::sleep(std::time::Duration::from_millis(150));
-
-    // Destroy any remaining `audibian_*` PipeWire nodes that no module owns.
-    // These come from legacy static `~/.config/pipewire/pipewire.conf.d/
-    // audibian-inputs.conf` drop-ins: they survive `unload-module` because
-    // pipewire created them directly from context.objects, not via pactl.
-    // Apps then resolve the `audibian_*` name to the lowest-id ghost and
-    // audio dead-ends there because matrix links only target the runtime
-    // sinks we just recreated.
-    destroy_orphan_audibian_nodes();
+    owned
 }
 
 fn destroy_orphan_audibian_nodes() {
@@ -1480,27 +1583,38 @@ fn destroy_orphan_audibian_nodes() {
         .args(["ls", "Node"])
         .output()
     else { return };
-    let txt = String::from_utf8_lossy(&out.stdout);
+    let owned = module_owned_node_names();
 
+    for id in parse_orphan_node_ids(&String::from_utf8_lossy(&out.stdout), &owned) {
+        std::process::Command::new("pw-cli")
+            .args(["destroy", &id.to_string()])
+            .spawn_detached();
+    }
+}
+
+/// Pick `audibian_*` node ids out of `pw-cli ls Node` output that no loaded
+/// pactl module owns.
+fn parse_orphan_node_ids(txt: &str, owned: &std::collections::HashSet<String>) -> Vec<u32> {
     let mut current_id: Option<u32> = None;
-    let mut to_destroy: Vec<u32> = Vec::new();
+    let mut orphans = Vec::new();
     for raw in txt.lines() {
         let line = raw.trim();
         if let Some(rest) = line.strip_prefix("id ") {
             current_id = rest.split(',').next()
                 .and_then(|s| s.trim().parse::<u32>().ok());
-        } else if line.starts_with("node.name = \"audibian_") {
-            if let Some(id) = current_id.take() {
-                to_destroy.push(id);
+        } else if let Some(rest) = line.strip_prefix("node.name = ") {
+            let name = rest.trim().trim_matches('"');
+            // `.monitor` nodes belong to their sink, never destroy them
+            // separately; anything a live module owns is not an orphan.
+            let node = name.strip_suffix(".monitor").unwrap_or(name);
+            if name.starts_with("audibian_") && !owned.contains(node) {
+                if let Some(id) = current_id.take() {
+                    orphans.push(id);
+                }
             }
         }
     }
-
-    for id in to_destroy {
-        std::process::Command::new("pw-cli")
-            .args(["destroy", &id.to_string()])
-            .spawn_detached();
-    }
+    orphans
 }
 
 pub fn create_null_sink(sink_name: &str) -> Option<u32> {
@@ -1519,11 +1633,19 @@ pub fn create_remap_source(monitor_name: &str, source_name: &str, description: &
             "load-module", "module-remap-source",
             &format!("source_name={}", source_name),
             &format!("master={}", monitor_name),
-            &format!("source_properties=device.description=\"{}\"", description),
+            &format!("source_properties=device.description=\"{}\"", sanitize_pa_value(description)),
         ])
         .output()
         .ok()?;
     String::from_utf8_lossy(&out.stdout).trim().parse::<u32>().ok()
+}
+
+/// Drop quotes and backslashes from a value destined for a `pactl` module
+/// argument: pactl re-joins its argv and `pa_modargs` re-splits the result,
+/// so a quote inside a user-typed channel name ends the value early and the
+/// remainder is parsed as further module arguments.
+fn sanitize_pa_value(value: &str) -> String {
+    value.chars().filter(|c| !matches!(c, '"' | '\\')).collect()
 }
 
 pub fn create_loopback(source: &str, sink: &str) -> Option<u32> {
@@ -1589,14 +1711,97 @@ pub fn create_source_loopback(source: &str, sink: &str, mono: bool) -> Option<u3
         "latency_msec=20".to_string(),
     ];
     if mono {
-        args.push("channels=1".to_string());
-        args.push("channel_map=mono".to_string());
+        // Keep mono input centered: request two mono channels so the mixed
+        // signal feeds both sides of the stereo input sink.
+        args.push("channels=2".to_string());
+        args.push("channel_map=mono,mono".to_string());
+        args.push("remix=yes".to_string());
     }
     let out = std::process::Command::new("pactl")
         .args(&args)
         .output()
         .ok()?;
-    String::from_utf8_lossy(&out.stdout).trim().parse::<u32>().ok()
+    let module_id = String::from_utf8_lossy(&out.stdout).trim().parse::<u32>().ok()?;
+    if mono {
+        center_mono_source_loopback(module_id, sink);
+    }
+    Some(module_id)
+}
+/// PulseAudio exposes a mono loopback as FL when it targets a stereo sink.
+/// Rewire that one output port to both sink channels so the mic is centered.
+fn center_mono_source_loopback(module_id: u32, sink: &str) {
+    let mut loopback_node = None;
+    for _ in 0..80 {
+        let Ok(out) = std::process::Command::new("pactl")
+            .args(["list", "source-outputs"])
+            .output()
+        else {
+            std::thread::sleep(std::time::Duration::from_millis(50));
+            continue;
+        };
+        if !out.status.success() {
+            std::thread::sleep(std::time::Duration::from_millis(50));
+            continue;
+        }
+        let text = String::from_utf8_lossy(&out.stdout);
+        let mut in_module = false;
+        for line in text.lines() {
+            let trimmed = line.trim();
+            if let Some(id) = trimmed.strip_prefix("Owner Module: ") {
+                in_module = id.trim().parse::<u32>().ok() == Some(module_id);
+            } else if in_module {
+                if let Some(name) = trimmed.strip_prefix("node.name = ") {
+                    loopback_node = name.trim_matches('"').to_string().into();
+                    break;
+                }
+            }
+        }
+        if loopback_node.is_some() {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
+
+    let Some(input_node) = loopback_node else {
+        log::warn!("Could not find source loopback for module {module_id}");
+        return;
+    };
+    let Some(output_name) = input_node.strip_prefix("input.") else {
+        log::warn!("Unexpected source loopback node name '{input_node}'");
+        return;
+    };
+    let output_fl = format!("output.{output_name}:output_FL");
+    let output_fr = format!("output.{output_name}:output_FR");
+    let sink_fr = format!("{sink}:playback_FR");
+    let mut stable_checks = 0;
+
+    // PipeWire may auto-connect the loopback after it appears. Keep enforcing
+    // the mono-to-both-sides link until its default FR route stays gone.
+    for _ in 0..100 {
+        if pw_link_exists(&output_fr, &sink_fr) {
+            let _ = std::process::Command::new("pw-link")
+                .args(["-d", &output_fr, &sink_fr])
+                .status();
+        }
+        if !pw_link_exists(&output_fl, &sink_fr) {
+            let _ = std::process::Command::new("pw-link")
+                .args(["-w", &output_fl, &sink_fr])
+                .status();
+        }
+        if pw_link_exists(&output_fl, &sink_fr) && !pw_link_exists(&output_fr, &sink_fr) {
+            stable_checks += 1;
+            if stable_checks == 20 {
+                return;
+            }
+        } else {
+            stable_checks = 0;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
+
+    log::warn!(
+        "Could not keep mono source loopback module {module_id} centered on '{sink}'"
+    );
 }
 
 /// Delete the legacy static `audibian-inputs.conf` pipewire drop-in.
@@ -1648,7 +1853,7 @@ pub fn apply_strip_pactl(sink: &str, fader: f32, pan: f32, muted: bool) {
 /// Mute/unmute every sink-input currently routed to `sink` via pactl.
 /// Best-effort: runs `pactl list short sink-inputs`, filters by sink id.
 fn apply_sink_input_mute(sink: &str, muted: bool) {
-    let Some(sink_id) = lookup_sink_id(sink) else { return };
+    let Some(sink_id) = sink_name_to_id(sink) else { return };
     let Ok(out) = std::process::Command::new("pactl")
         .args(["list", "short", "sink-inputs"])
         .output()
@@ -1665,22 +1870,6 @@ fn apply_sink_input_mute(sink: &str, muted: bool) {
             .args(["set-sink-input-mute", &si_id.to_string(), m])
             .spawn_detached();
     }
-}
-
-fn lookup_sink_id(sink_name: &str) -> Option<u32> {
-    let out = std::process::Command::new("pactl")
-        .args(["list", "short", "sinks"])
-        .output()
-        .ok()?;
-    let txt = String::from_utf8_lossy(&out.stdout);
-    for line in txt.lines() {
-        let cols: Vec<&str> = line.split('\t').collect();
-        if cols.len() < 2 { continue; }
-        if cols[1] == sink_name {
-            return cols[0].parse().ok();
-        }
-    }
-    None
 }
 
 /// Build the runtime solo key for a strip.
@@ -1740,7 +1929,7 @@ fn set_mute_pactl(node_name: &str, muted: bool) {
 /// Save persisted port-level connections for a src/dst node name pair.
 /// `links` is a list of [src_port_name, dst_port_name] pairs from the frontend.
 /// Passing an empty list removes the entry.
-#[tauri::command]
+#[tauri::command(async)]
 pub fn save_matrix_connections(
     state: State<AppState>,
     src_node: String,
@@ -1761,7 +1950,7 @@ pub fn save_matrix_connections(
     cfg.save();
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn get_matrix_config(state: State<AppState>) -> crate::matrix_config::MatrixConfig {
     state.matrix_config.lock().unwrap().clone()
 }
@@ -1809,15 +1998,15 @@ pub fn restore_matrix_connections(
 // Soundboard
 // ---------------------------------------------------------------------------
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn soundboard_list(state: State<AppState>) -> Vec<Sound> {
-    state.soundboard_config.lock().unwrap().sounds.clone()
+    state.soundboard_config.lock().sounds.clone()
 }
 
 /// Open a native file picker (`zenity` then `kdialog` as fallback) and
 /// return the chosen path(s). `--multiple` lets the user import a batch
 /// from one dialog. Empty vec = cancelled / picker not installed.
-#[tauri::command]
+#[tauri::command(async)]
 pub fn soundboard_pick_file() -> Vec<String> {
     let run = |bin: &str, args: &[&str], sep: &str| -> Option<Vec<String>> {
         let out = std::process::Command::new(bin).args(args).output().ok()?;
@@ -1852,7 +2041,7 @@ pub fn soundboard_pick_file() -> Vec<String> {
 /// file and probes its duration on a background thread. When the probe
 /// finishes, mixer.toml gets a second save and the UI re-fetches to pick
 /// up the duration. Returns the placeholder Sound (duration=None).
-#[tauri::command]
+#[tauri::command(async)]
 pub fn soundboard_add(
     state: State<AppState>,
     source_path: String,
@@ -1865,7 +2054,7 @@ pub fn soundboard_add(
     std::fs::create_dir_all(&dir).ok()?;
 
     let sound = {
-        let mut cfg = state.soundboard_config.lock().unwrap();
+        let mut cfg = state.soundboard_config.lock();
         let id = cfg.next_id();
         let stem = src.file_stem().and_then(|s| s.to_str()).unwrap_or("sound");
         let name = display_name.unwrap_or_else(|| stem.to_string());
@@ -1892,14 +2081,14 @@ pub fn soundboard_add(
     std::thread::spawn(move || {
         if std::fs::copy(&src_clone, &dest_path).is_err() {
             // Roll back the registration on copy failure.
-            let mut cfg = cfg_handle.lock().unwrap();
+            let mut cfg = cfg_handle.lock();
             cfg.sounds.retain(|s| s.id != id);
             cfg.save();
             return;
         }
         let dur = probe_duration_ms(&dest_path);
         if dur.is_some() {
-            let mut cfg = cfg_handle.lock().unwrap();
+            let mut cfg = cfg_handle.lock();
             if let Some(s) = cfg.sounds.iter_mut().find(|s| s.id == id) {
                 s.duration_ms = dur;
                 cfg.save();
@@ -1910,9 +2099,9 @@ pub fn soundboard_add(
     Some(sound)
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn soundboard_remove(state: State<AppState>, id: u32) {
-    let mut cfg = state.soundboard_config.lock().unwrap();
+    let mut cfg = state.soundboard_config.lock();
     if let Some(pos) = cfg.sounds.iter().position(|s| s.id == id) {
         let s = cfg.sounds.remove(pos);
         let _ = std::fs::remove_file(&s.path);
@@ -1920,9 +2109,9 @@ pub fn soundboard_remove(state: State<AppState>, id: u32) {
     }
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn soundboard_rename(state: State<AppState>, id: u32, name: String) {
-    let mut cfg = state.soundboard_config.lock().unwrap();
+    let mut cfg = state.soundboard_config.lock();
     if let Some(s) = cfg.sounds.iter_mut().find(|s| s.id == id) {
         s.name = name;
         cfg.save();
@@ -1931,14 +2120,14 @@ pub fn soundboard_rename(state: State<AppState>, id: u32, name: String) {
 
 /// Set or clear the trim window. Either bound may be `None` to disable
 /// that side (None/None plays the full file). Stored in milliseconds.
-#[tauri::command]
+#[tauri::command(async)]
 pub fn soundboard_set_trim(
     state: State<AppState>,
     id: u32,
     start_ms: Option<u32>,
     end_ms: Option<u32>,
 ) {
-    let mut cfg = state.soundboard_config.lock().unwrap();
+    let mut cfg = state.soundboard_config.lock();
     if let Some(s) = cfg.sounds.iter_mut().find(|s| s.id == id) {
         // Normalise: swap if reversed, drop end if <= start.
         let (a, b) = match (start_ms, end_ms) {
@@ -1954,39 +2143,26 @@ pub fn soundboard_set_trim(
     }
 }
 
-/// Play a sound by id into the soundboard sink. Untrimmed sounds run
-/// `paplay` directly. Trimmed sounds pipe `ffmpeg -ss/-to … -f wav -`
-/// into `paplay --raw`, so the cut happens on the fly without writing a
-/// temp file. Tracks every child for stop-all.
-#[tauri::command]
-pub fn soundboard_play(state: State<AppState>, id: u32) {
+/// Play a sound by id into the soundboard sink.
+/// Decode every file through ffmpeg to raw PCM and pipe it to paplay. Optional
+/// trim bounds are applied on the fly; no temporary audio file is written.
+/// Tracks both child processes for stop-all.
+#[tauri::command(async)]
+pub fn soundboard_play(state: State<AppState>, id: u32) -> Result<(), String> {
     let sound = {
-        let cfg = state.soundboard_config.lock().unwrap();
-        match cfg.sounds.iter().find(|s| s.id == id) {
-            Some(s) => s.clone(),
-            None => return,
-        }
-    };
+        let cfg = state.soundboard_config.lock();
+        cfg.sounds.iter().find(|s| s.id == id).cloned()
+    }
+    .ok_or_else(|| format!("Soundboard sound {id} no longer exists"))?;
+
+    if !std::path::Path::new(&sound.path).is_file() {
+        return Err(format!("Sound file not found: {}", sound.path));
+    }
 
     reap_finished_soundboard_procs(&state);
 
-    let trimmed = sound.start_ms.is_some() || sound.end_ms.is_some();
-    if !trimmed {
-        let child = std::process::Command::new("paplay")
-            .args(["--device", SOUNDBOARD_SINK_NAME, &sound.path])
-            .stdin(std::process::Stdio::null())
-            .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::null())
-            .spawn();
-        if let Ok(child) = child {
-            state.soundboard_procs.lock().unwrap().push(child);
-        }
-        return;
-    }
-
-    // Build the ffmpeg pipe. `-ss` before `-i` is a fast seek; pair with
-    // `-to` (absolute end timestamp). Output s16le 48k stereo so paplay
-    // doesn't need to negotiate format.
+    // Decode every format to raw PCM. paplay's file decoder does not support
+    // every format accepted by ffprobe during import.
     let mut ff_args: Vec<String> = vec!["-nostdin".into(), "-loglevel".into(), "error".into()];
     if let Some(start) = sound.start_ms {
         ff_args.push("-ss".into());
@@ -2002,24 +2178,34 @@ pub fn soundboard_play(state: State<AppState>, id: u32) {
         }
     }
     ff_args.extend([
-        "-f".into(), "s16le".into(),
-        "-ar".into(), "48000".into(),
-        "-ac".into(), "2".into(),
+        "-map".into(),
+        "0:a:0".into(),
+        "-f".into(),
+        "s16le".into(),
+        "-ar".into(),
+        "48000".into(),
+        "-ac".into(),
+        "2".into(),
         "pipe:1".into(),
     ]);
 
-    let ff = std::process::Command::new("ffmpeg")
+    let mut ff = std::process::Command::new("ffmpeg")
         .args(&ff_args)
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::null())
-        .spawn();
-    let mut ff = match ff { Ok(c) => c, Err(_) => return };
-    let ff_stdout = match ff.stdout.take() { Some(s) => s, None => return };
+        .spawn()
+        .map_err(|e| format!("Could not start ffmpeg: {e}"))?;
+    let Some(ff_stdout) = ff.stdout.take() else {
+        let _ = ff.kill();
+        let _ = ff.wait();
+        return Err("ffmpeg did not provide an audio stream".into());
+    };
 
     let pap = std::process::Command::new("paplay")
         .args([
-            "--device", SOUNDBOARD_SINK_NAME,
+            "--device",
+            SOUNDBOARD_SINK_NAME,
             "--raw",
             "--format=s16le",
             "--rate=48000",
@@ -2030,19 +2216,22 @@ pub fn soundboard_play(state: State<AppState>, id: u32) {
         .stderr(std::process::Stdio::null())
         .spawn();
 
-    let mut procs = state.soundboard_procs.lock().unwrap();
     match pap {
         Ok(pap) => {
-            procs.push(ff);
-            procs.push(pap);
+            state.soundboard_procs.lock().extend([ff, pap]);
+            Ok(())
         }
-        Err(_) => { let _ = ff.kill(); let _ = ff.wait(); }
+        Err(e) => {
+            let _ = ff.kill();
+            let _ = ff.wait();
+            Err(format!("Could not start paplay: {e}"))
+        }
     }
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn soundboard_stop_all(state: State<AppState>) {
-    let mut procs = state.soundboard_procs.lock().unwrap();
+    let mut procs = state.soundboard_procs.lock();
     for child in procs.iter_mut() {
         let _ = child.kill();
         // Reap before `clear` drops the handles, otherwise every stopped
@@ -2053,7 +2242,7 @@ pub fn soundboard_stop_all(state: State<AppState>) {
 }
 
 fn reap_finished_soundboard_procs(state: &State<AppState>) {
-    let mut procs = state.soundboard_procs.lock().unwrap();
+    let mut procs = state.soundboard_procs.lock();
     procs.retain_mut(|c| matches!(c.try_wait(), Ok(None)));
 }
 
@@ -2087,7 +2276,7 @@ fn probe_duration_ms(path: &std::path::Path) -> Option<u32> {
 // nowhere. Plugins are now hosted directly inside audibian's own process.
 // ---------------------------------------------------------------------------
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn midi_channel_list(state: State<AppState>) -> Vec<MidiChannel> {
     state.mixer_config.lock().unwrap().midi_channels.clone()
 }
@@ -2096,7 +2285,7 @@ pub fn midi_channel_list(state: State<AppState>) -> Vec<MidiChannel> {
 /// null-sink, wires its monitor → master so the strip is audible as soon
 /// as a plugin is loaded. Does NOT load a plugin here — that happens on
 /// `midi_plugin_load`, so headless boot is cheap.
-#[tauri::command]
+#[tauri::command(async)]
 pub fn midi_channel_add(state: State<AppState>, name: Option<String>) -> Option<MidiChannel> {
     let ch = {
         let mut cfg = state.mixer_config.lock().unwrap();
@@ -2132,7 +2321,7 @@ pub fn midi_channel_add(state: State<AppState>, name: Option<String>) -> Option<
     Some(ch)
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn midi_channel_remove(state: State<AppState>, id: u32) {
     // Tear down any running plugin host for this channel first.
     if let Some(handle) = state.midi_plugin_hosts.lock().unwrap().remove(&id) {
@@ -2181,10 +2370,18 @@ fn lookup_module_id_by_sink(sink_name: &str) -> Option<u32> {
         .args(["list", "short", "modules"])
         .output()
         .ok()?;
-    let txt = String::from_utf8_lossy(&out.stdout);
-    let needle = format!("sink_name={}", sink_name);
+    parse_module_id_for_sink(&String::from_utf8_lossy(&out.stdout), sink_name)
+}
+
+/// Parse `pactl list short modules` output for the null-sink module owning
+/// `sink_name`. Split out from the subprocess call so it can be tested
+/// against captured pactl output.
+fn parse_module_id_for_sink(txt: &str, sink_name: &str) -> Option<u32> {
+    let needle = format!("sink_name={sink_name}");
     for line in txt.lines() {
-        if line.contains("module-null-sink") && line.contains(&needle) {
+        // Field-exact: `contains` would also match `sink_name=audibian_midi_10`
+        // while looking for `audibian_midi_1` and unload another channel's sink.
+        if line.contains("module-null-sink") && line.split_whitespace().any(|tok| tok == needle) {
             if let Some(id_str) = line.split('\t').next() {
                 if let Ok(id) = id_str.trim().parse::<u32>() {
                     return Some(id);
@@ -2195,7 +2392,7 @@ fn lookup_module_id_by_sink(sink_name: &str) -> Option<u32> {
     None
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn midi_channel_rename(state: State<AppState>, id: u32, name: String) {
     let mut cfg = state.mixer_config.lock().unwrap();
     if let Some(c) = cfg.midi_channels.iter_mut().find(|c| c.id == id) {
@@ -2204,7 +2401,7 @@ pub fn midi_channel_rename(state: State<AppState>, id: u32, name: String) {
     }
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn midi_plugin_add(
     state: State<AppState>,
     channel_id: u32,
@@ -2233,7 +2430,7 @@ pub fn midi_plugin_add(
     Some(plugin)
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn midi_plugin_remove(state: State<AppState>, channel_id: u32, plugin_id: u32) {
     let mut cfg = state.mixer_config.lock().unwrap();
     if let Some(ch) = cfg.midi_channels.iter_mut().find(|c| c.id == channel_id) {
@@ -2245,7 +2442,7 @@ pub fn midi_plugin_remove(state: State<AppState>, channel_id: u32, plugin_id: u3
 /// Reorder the plugin chain. `plugin_ids` is the new order; any ids not
 /// present in the channel are ignored, any missing existing ids stay at
 /// their original tail position (defensive against UI/state drift).
-#[tauri::command]
+#[tauri::command(async)]
 pub fn midi_plugin_reorder(state: State<AppState>, channel_id: u32, plugin_ids: Vec<u32>) {
     let mut cfg = state.mixer_config.lock().unwrap();
     let Some(ch) = cfg.midi_channels.iter_mut().find(|c| c.id == channel_id) else { return };
@@ -2262,7 +2459,7 @@ pub fn midi_plugin_reorder(state: State<AppState>, channel_id: u32, plugin_ids: 
 
 /// List available VST3 bundles (fast filesystem scan — see
 /// `midi::host::scan_paths`). Backs the "Add Plugin" picker.
-#[tauri::command]
+#[tauri::command(async)]
 pub fn midi_plugin_scan() -> Vec<std::path::PathBuf> {
     crate::midi::host::scan_paths()
 }
@@ -2272,9 +2469,13 @@ pub fn midi_plugin_scan() -> Vec<std::path::PathBuf> {
 /// several in series is a later phase, so only `plugins[0]` is used.
 /// Replaces any already-running host for this channel (relaunch = fresh
 /// load, e.g. after picking a different plugin).
-#[tauri::command]
+#[tauri::command(async)]
 pub fn midi_plugin_load(state: State<AppState>, channel_id: u32) -> bool {
-    if let Some(handle) = state.midi_plugin_hosts.lock().unwrap().remove(&channel_id) {
+    // Take the handle out first: `stop()` saves plugin state and tears down
+    // the GUI and audio thread, and the MIDI input router locks this same
+    // map for every incoming byte — holding the guard stalls live input.
+    let previous = state.midi_plugin_hosts.lock().unwrap().remove(&channel_id);
+    if let Some(handle) = previous {
         handle.stop();
     }
 
@@ -2300,9 +2501,11 @@ pub fn midi_plugin_load(state: State<AppState>, channel_id: u32) -> bool {
 
 /// Stop the channel's running plugin (state is saved first — see
 /// `PluginHostHandle::stop`) without removing the channel itself.
-#[tauri::command]
+#[tauri::command(async)]
 pub fn midi_plugin_unload(state: State<AppState>, channel_id: u32) {
-    if let Some(handle) = state.midi_plugin_hosts.lock().unwrap().remove(&channel_id) {
+    let handle = state.midi_plugin_hosts.lock().unwrap().remove(&channel_id);
+    if let Some(handle) = handle {
+        // See `midi_plugin_load`: never stop a host under the map lock.
         handle.stop();
     }
 }
@@ -2311,7 +2514,7 @@ pub fn midi_plugin_unload(state: State<AppState>, channel_id: u32) {
 /// in-memory only (a fresh `PluginHostHandle`, not something persisted in
 /// `MixerConfig`), so the UI polls this instead of inferring it from the
 /// config it already has.
-#[tauri::command]
+#[tauri::command(async)]
 pub fn midi_loaded_channel_ids(state: State<AppState>) -> Vec<u32> {
     state.midi_plugin_hosts.lock().unwrap().keys().copied().collect()
 }
@@ -2319,7 +2522,7 @@ pub fn midi_loaded_channel_ids(state: State<AppState>) -> Vec<u32> {
 /// Fire a test MIDI note directly into a running channel's plugin. The live
 /// keyboard bridge now feeds real MIDI input into loaded plugins, but this
 /// remains a quick sanity check for instruments that are already loaded.
-#[tauri::command]
+#[tauri::command(async)]
 pub fn midi_plugin_test_note(state: State<AppState>, channel_id: u32) -> bool {
     let hosts = state.midi_plugin_hosts.lock().unwrap();
     let Some(handle) = hosts.get(&channel_id) else { return false };
@@ -2328,13 +2531,6 @@ pub fn midi_plugin_test_note(state: State<AppState>, channel_id: u32) -> bool {
     true
 }
 
-/// Report whether the current session can embed plugin windows inline.
-/// Always false for now — native GUI embedding (via `Plugin::open_editor` +
-/// `WindowHandle::from_x11`, reusing `x11_embed.rs`) is a follow-up phase.
-#[tauri::command]
-pub fn midi_embed_available(_state: State<AppState>) -> bool {
-    false
-}
 
 #[tauri::command]
 pub fn midi_plugin_show_native_gui(state: State<AppState>, channel_id: u32, _plugin_id: u32) -> bool {
@@ -2354,37 +2550,6 @@ pub fn midi_plugin_hide_native_gui(state: State<AppState>, channel_id: u32, _plu
     let Some(handle) = hosts.get(&channel_id) else { return false };
     handle.hide_gui();
     true
-}
-
-#[tauri::command]
-pub fn midi_plugin_embed_gui(
-    _state: State<AppState>,
-    _channel_id: u32,
-    _plugin_id: u32,
-    _x: i32,
-    _y: i32,
-    _width: u32,
-    _height: u32,
-) -> bool {
-    false
-}
-
-#[tauri::command]
-pub fn midi_plugin_position_gui(
-    _state: State<AppState>,
-    _channel_id: u32,
-    _plugin_id: u32,
-    _x: i32,
-    _y: i32,
-    _width: u32,
-    _height: u32,
-) -> bool {
-    false
-}
-
-#[tauri::command]
-pub fn midi_plugin_unembed_gui(_state: State<AppState>, _channel_id: u32, _plugin_id: u32) -> bool {
-    false
 }
 
 #[cfg(test)]
@@ -2542,5 +2707,84 @@ mod tests {
         for stream in [1, 15, 16, 18] {
             assert!(duplicate_links_of(&g, &cfg, stream).is_empty());
         }
+    }
+    #[test]
+    fn pw_link_detection_requires_the_exact_route() {
+        let listing = "\
+audibian_master:playback_FR
+  |<- audibian_spotify:monitor_FR
+audibian_microfono:monitor_FL
+  |-> audibian_master:playback_FL
+  |-> audibian-meter-audibian_microfono:input_FL
+audibian_microfono:monitor_FR
+  |-> audibian-meter-audibian_microfono:input_FR
+";
+        assert!(pw_link_list_has_edge(
+            listing,
+            "audibian_microfono:monitor_FL",
+            "audibian_master:playback_FL",
+        ));
+        assert!(!pw_link_list_has_edge(
+            listing,
+            "audibian_microfono:monitor_FL",
+            "audibian_master:playback_FR",
+        ));
+        assert!(!pw_link_list_has_edge(
+            listing,
+            "audibian_microfono:monitor_FR",
+            "audibian_master:playback_FR",
+        ));
+    }
+
+    /// Captured `pactl list short modules`. The ids are tab-separated and the
+    /// args column is a single space-separated field.
+    const MODULES_LISTING: &str = "\
+536870916\tmodule-null-sink\tsink_name=audibian_master\t
+536870917\tmodule-loopback\tsource=audibian_master.monitor sink=alsa_output.usb-M-Audio analog-stereo latency_msec=20\t
+536870918\tmodule-null-sink\tsink_name=audibian_midi_1\t
+536870919\tmodule-null-sink\tsink_name=audibian_midi_10\t
+";
+
+    /// `contains` used to match `sink_name=audibian_midi_10` while looking up
+    /// `audibian_midi_1`, so removing channel 1 unloaded channel 10's sink.
+    #[test]
+    fn module_lookup_matches_the_whole_sink_name() {
+        assert_eq!(
+            parse_module_id_for_sink(MODULES_LISTING, "audibian_midi_1"),
+            Some(536870918)
+        );
+        assert_eq!(
+            parse_module_id_for_sink(MODULES_LISTING, "audibian_midi_10"),
+            Some(536870919)
+        );
+        assert_eq!(parse_module_id_for_sink(MODULES_LISTING, "audibian_midi"), None);
+        // A loopback is not the sink's owner, even when it names it.
+        assert_eq!(
+            parse_module_id_for_sink(MODULES_LISTING, "audibian_master.monitor"),
+            None
+        );
+    }
+
+    /// The orphan sweep destroys PipeWire nodes outright, so anything a loaded
+    /// module still owns has to be excluded — including its monitor.
+    #[test]
+    fn only_unowned_audibian_nodes_count_as_orphans() {
+        let owned = parse_module_owned_names(MODULES_LISTING);
+        assert!(owned.contains("audibian_master"));
+        assert!(owned.contains("audibian_midi_10"));
+
+        // Captured `pw-cli ls Node`: the id line precedes the properties.
+        let nodes = "\
+\tid 30, type PipeWire:Interface:Node/3
+ \t\tobject.serial = \"30\"
+ \t\tnode.name = \"Dummy-Driver\"
+\tid 51, type PipeWire:Interface:Node/3
+ \t\tnode.name = \"audibian_master\"
+\tid 52, type PipeWire:Interface:Node/3
+ \t\tnode.name = \"audibian_master.monitor\"
+\tid 77, type PipeWire:Interface:Node/3
+ \t\tnode.name = \"audibian_ghost\"
+";
+        assert_eq!(parse_orphan_node_ids(nodes, &owned), vec![77]);
     }
 }

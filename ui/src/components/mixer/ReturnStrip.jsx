@@ -15,7 +15,7 @@ const ReturnStrip = React.memo(function ReturnStrip({
   onDragStart, onDragOver, onDragLeave, onDragEnd, onDrop,
   isDragging, isDragOverTarget,
   soloActive, onSoloToggle,
-  letter,
+  letter, onError, onFaderDrag,
 }) {
   const accent = ret.color || autoColor(ret.id + 180)
   const faderKey = `ret-${ret.id}`
@@ -55,7 +55,7 @@ const ReturnStrip = React.memo(function ReturnStrip({
         <input
           defaultValue={ret.name}
           key={ret.name}
-          onBlur={e => invoke('update_return_channel_name', { id: ret.id, name: e.target.value }).catch(console.error)}
+          onBlur={e => invoke('update_return_channel_name', { id: ret.id, name: e.target.value }).catch(onError)}
           onMouseDown={e => e.stopPropagation()}
           className="bg-transparent text-[10px] font-semibold text-center flex-1 min-w-0 focus:outline-none focus:bg-white/[0.05] rounded-sm py-0.5 truncate"
           style={{ color: CREAM }}
@@ -86,22 +86,24 @@ const ReturnStrip = React.memo(function ReturnStrip({
       <div className="w-full h-full flex items-center justify-center bg-white/[0.05] border border-white/[0.11] rounded-sm py-1">
         <PanKnob
           value={ret.pan ?? 0}
-          onChange={(p) => invoke('set_strip_pan', { id: ret.id, isInput: false, pan: p }).catch(console.error)}
+          label={`Pan ${ret.name}`}
+          onChange={(p) => invoke('set_strip_pan', { id: ret.id, isInput: false, pan: p }).catch(onError)}
         />
       </div>
 
       {/* Row 5 — Volume */}
       <div className="grid grid-cols-2 gap-1 w-full h-full">
-        <div
+        <button
           onDoubleClick={() => {
             setFader(faderKey, 100)
-            invoke('set_strip_volume', { id: ret.id, isInput: false, volume: 1.0 }).catch(console.error)
+            invoke('set_strip_volume', { id: ret.id, isInput: false, volume: 1.0 }).catch(onError)
           }}
           className="text-[8.5px] font-mono text-center flex items-center justify-center rounded-sm cursor-pointer tabular-nums bg-white/[0.05] border border-white/[0.11] hover:bg-white/[0.10] transition-colors"
           style={{ color: CREAM }}
+          title="Volume — double-click to reset"
         >
           {faderTxt}
-        </div>
+        </button>
         <div
           ref={readoutRef}
           className="text-[8.5px] font-mono text-center flex items-center justify-center rounded-sm tabular-nums border border-white/[0.11]"
@@ -116,10 +118,10 @@ const ReturnStrip = React.memo(function ReturnStrip({
       <div className="h-full w-full min-h-0 relative">
         <MeterFader
           value={faderVal}
-          onChange={v => {
-            setFader(faderKey, v)
-            invoke('set_strip_volume', { id: ret.id, isInput: false, volume: v / 100 }).catch(console.error)
-          }}
+          label={`Volume ${ret.name}`}
+          onChange={v => setFader(faderKey, v)}
+          onCommit={v => invoke('set_strip_volume', { id: ret.id, isInput: false, volume: v / 100 }).catch(onError)}
+          onDragState={active => onFaderDrag(faderKey, active)}
           nodeName={ret.sink_name}
         />
       </div>
@@ -130,7 +132,8 @@ const ReturnStrip = React.memo(function ReturnStrip({
           onClick={() => {
             const next = !muted
             setMuted(next)
-            invoke('set_strip_mute', { id: ret.id, isInput: false, muted: next }).catch(console.error)
+            invoke('set_strip_mute', { id: ret.id, isInput: false, muted: next })
+              .catch(e => { setMuted(!next); onError(e) })
           }}
           className="w-6 h-6 rounded-sm text-[10px] font-bold transition-all flex items-center justify-center"
           style={{

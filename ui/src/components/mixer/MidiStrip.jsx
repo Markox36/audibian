@@ -17,7 +17,7 @@ const MidiStrip = React.memo(function MidiStrip({
   ch, returnChannels, sends, loaded, selected, onSelect,
   faderVal, setFader,
   onRemove,
-  soloActive, onSoloToggle,
+  soloActive, onSoloToggle, onError, onFaderDrag,
 }) {
   const accent = ch.color || autoColor(ch.id + 90)
   const faderKey = `midi-${ch.id}`
@@ -37,14 +37,13 @@ const MidiStrip = React.memo(function MidiStrip({
   return (
     <StripFrame accent={accent} editing={selected} dragClasses="">
       {/* Row 1 — name */}
-      <div
-        onClick={onSelect}
-        className="flex items-center gap-1 px-1 h-full w-full bg-white/[0.09] border border-white/[0.11] rounded-sm cursor-pointer"
-      >
+      {/* Plain container: it holds the name <input>, which cannot live inside
+          a <button>. Selecting the channel is the plugin badge below. */}
+      <div className="flex items-center gap-1 px-1 h-full w-full bg-white/[0.09] border border-white/[0.11] rounded-sm">
         <input
           defaultValue={ch.name}
           key={ch.name}
-          onBlur={e => invoke('midi_channel_rename', { id: ch.id, name: e.target.value }).catch(console.error)}
+          onBlur={e => invoke('midi_channel_rename', { id: ch.id, name: e.target.value }).catch(onError)}
           onMouseDown={e => e.stopPropagation()}
           onClick={e => e.stopPropagation()}
           className="bg-transparent text-[10px] font-semibold text-center flex-1 min-w-0 focus:outline-none focus:bg-white/[0.05] rounded-sm py-0.5 truncate"
@@ -115,22 +114,24 @@ const MidiStrip = React.memo(function MidiStrip({
       <div className="w-full h-full flex items-center justify-center bg-white/[0.05] border border-white/[0.11] rounded-sm py-1">
         <PanKnob
           value={ch.pan ?? 0}
-          onChange={(p) => invoke('midi_channel_set_pan', { id: ch.id, pan: p }).catch(console.error)}
+          label={`Pan ${ch.name}`}
+          onChange={(p) => invoke('midi_channel_set_pan', { id: ch.id, pan: p }).catch(onError)}
         />
       </div>
 
       {/* Row 5 — Volume readouts */}
       <div className="grid grid-cols-2 gap-1 w-full h-full">
-        <div
+        <button
           onDoubleClick={() => {
             setFader(faderKey, 100)
-            invoke('midi_channel_set_volume', { id: ch.id, volume: 1.0 }).catch(console.error)
+            invoke('midi_channel_set_volume', { id: ch.id, volume: 1.0 }).catch(onError)
           }}
           className="text-[8.5px] font-mono text-center flex items-center justify-center rounded-sm cursor-pointer tabular-nums bg-white/[0.05] border border-white/[0.11] hover:bg-white/[0.10] transition-colors"
           style={{ color: CREAM }}
+          title="Volume — double-click to reset"
         >
           {faderTxt}
-        </div>
+        </button>
         <div
           ref={readoutRef}
           className="text-[8.5px] font-mono text-center flex items-center justify-center rounded-sm tabular-nums border border-white/[0.11]"
@@ -145,10 +146,10 @@ const MidiStrip = React.memo(function MidiStrip({
       <div className="h-full w-full min-h-0 relative">
         <MeterFader
           value={faderVal}
-          onChange={v => {
-            setFader(faderKey, v)
-            invoke('midi_channel_set_volume', { id: ch.id, volume: v / 100 }).catch(console.error)
-          }}
+          label={`Volume ${ch.name}`}
+          onChange={v => setFader(faderKey, v)}
+          onCommit={v => invoke('midi_channel_set_volume', { id: ch.id, volume: v / 100 }).catch(onError)}
+          onDragState={active => onFaderDrag(faderKey, active)}
           nodeName={ch.sink_name}
         />
       </div>
@@ -159,7 +160,8 @@ const MidiStrip = React.memo(function MidiStrip({
           onClick={() => {
             const next = !muted
             setMuted(next)
-            invoke('midi_channel_set_mute', { id: ch.id, muted: next }).catch(console.error)
+            invoke('midi_channel_set_mute', { id: ch.id, muted: next })
+              .catch(e => { setMuted(!next); onError(e) })
           }}
           className="w-6 h-6 rounded-sm text-[10px] font-bold transition-all flex items-center justify-center"
           style={{

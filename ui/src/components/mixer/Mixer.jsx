@@ -27,6 +27,10 @@ export default function Mixer({ graph }) {
   // written to the DOM by meterStore.js. Putting them in state re-rendered the
   // whole mixer at display rate. See meterStore.js.
   const [faderValues, setFaderValues] = useState({})
+  const [error, setError] = useState('')
+  // Key of the fader being dragged right now: its value must not be
+  // overwritten by a config reload mid-gesture.
+  const draggingKeyRef = useRef(null)
   const [modal, setModal] = useState(null)
   const [newInputDialog, setNewInputDialog] = useState(null)
   const [newReturnDialog, setNewReturnDialog] = useState(null)
@@ -44,20 +48,17 @@ export default function Mixer({ graph }) {
     invoke('get_mixer_config').then(cfg => {
       setConfig(cfg)
       setFaderValues(prev => {
+        // Always take the backend's value, so external changes (pavucontrol,
+        // an applied profile) land in the UI. The dragged fader is the one
+        // exception: the pointer owns it until the drag ends.
         const next = { ...prev }
-        for (const c of cfg.input_channels || []) {
-          const k = `in-${c.id}`
-          if (next[k] === undefined && typeof c.fader === 'number') next[k] = c.fader * 100
+        const put = (k, fader) => {
+          if (k !== draggingKeyRef.current && typeof fader === 'number') next[k] = fader * 100
         }
-        for (const r of cfg.return_channels || []) {
-          const k = `ret-${r.id}`
-          if (next[k] === undefined && typeof r.fader === 'number') next[k] = r.fader * 100
-        }
-        for (const m of cfg.midi_channels || []) {
-          const k = `midi-${m.id}`
-          if (next[k] === undefined && typeof m.fader === 'number') next[k] = m.fader * 100
-        }
-        if (next.master === undefined && typeof cfg.master_fader === 'number') next.master = cfg.master_fader * 100
+        for (const c of cfg.input_channels || []) put(`in-${c.id}`, c.fader)
+        for (const r of cfg.return_channels || []) put(`ret-${r.id}`, r.fader)
+        for (const m of cfg.midi_channels || []) put(`midi-${m.id}`, m.fader)
+        put('master', cfg.master_fader)
         return next
       })
       setLoading(false)
@@ -66,12 +67,33 @@ export default function Mixer({ graph }) {
     refreshLoadedMidi()
   }
 
+  // A strip rejected by the backend leaves the UI showing a value that never
+  // took: show it and resync from the backend.
+  const handleError = useCallback((e) => {
+    setError(String(e))
+    loadConfig()
+  }, [])
+
+  const onFaderDrag = useCallback((key, active) => {
+    draggingKeyRef.current = active ? key : null
+  }, [])
+
   useEffect(() => {
     loadConfig()
-    const unsubs = []
-    listen('pw-node-added', () => loadConfig()).then(u => unsubs.push(u))
-    listen('pw-node-removed', () => loadConfig()).then(u => unsubs.push(u))
-    return () => { unsubs.forEach(u => u()) }
+    // Launching an app floods these events; one reload per burst is enough.
+    let timer = 0
+    const reload = () => {
+      clearTimeout(timer)
+      timer = setTimeout(loadConfig, 150)
+    }
+    const subs = Promise.all([
+      listen('pw-node-added', reload),
+      listen('pw-node-removed', reload),
+    ])
+    return () => {
+      clearTimeout(timer)
+      subs.then(us => us.forEach(u => u()))
+    }
   }, [])
 
   const sinkNodes = useMemo(() => graph.nodes.filter(n => n.media_class === 'Audio/Sink'), [graph.nodes])
@@ -107,19 +129,25 @@ export default function Mixer({ graph }) {
     await invoke('remove_return_channel', { id }).catch(console.error)
     loadConfig()
   }, [])
+  const handleMonoToggle = useCallback(async (id, mono) => {
+    await invoke('set_input_mono', { id, mono }).catch(console.error)
+    loadConfig()
+  }, [])
 
+  // Mirrors `draggedInfo` so the dragover handler can read it without a state
+  // updater (React may run those twice).
+  const draggedInfoRef = useRef(null)
   const handleDragStart = useCallback((e, id, isInput) => {
     e.dataTransfer.setData('channelId', id)
     e.dataTransfer.setData('isInput', isInput ? '1' : '0')
+    draggedInfoRef.current = { id, isInput }
     setDraggedInfo({ id, isInput })
   }, [])
-  const handleDragEnd = useCallback(() => { setDraggedInfo(null); setDragOverId(null) }, [])
+  const handleDragEnd = useCallback(() => { draggedInfoRef.current = null; setDraggedInfo(null); setDragOverId(null) }, [])
   const handleDragOver = useCallback((e, id, isInput) => {
     e.preventDefault()
-    setDraggedInfo(curr => {
-      if (curr && curr.isInput === isInput && curr.id !== id) setDragOverId(id)
-      return curr
-    })
+    const curr = draggedInfoRef.current
+    if (curr && curr.isInput === isInput && curr.id !== id) setDragOverId(id)
   }, [])
   const handleDragLeave = useCallback((e, id) => {
     setDragOverId(curr => (curr === id ? null : curr))
@@ -127,6 +155,7 @@ export default function Mixer({ graph }) {
   const handleDrop = useCallback(async (e, targetId, targetIsInput) => {
     const draggedId = parseInt(e.dataTransfer.getData('channelId'))
     const draggedIsInput = e.dataTransfer.getData('isInput') === '1'
+    draggedInfoRef.current = null
     setDraggedInfo(null); setDragOverId(null)
     if (draggedId === targetId || draggedIsInput !== targetIsInput) return
     let inputOrder = config.input_channels.slice().sort((a, b) => a.order - b.order).map(c => c.id)
@@ -151,25 +180,25 @@ export default function Mixer({ graph }) {
 
   const handleSoloToggle = useCallback((id, isInput) => {
     const key = `${isInput ? 'in' : 'ret'}-${id}`
-    setSoloSet(prev => {
-      const next = new Set(prev)
-      const willActivate = !next.has(key)
-      if (willActivate) next.add(key); else next.delete(key)
-      invoke('set_strip_solo', { id, isInput, solo: willActivate }).then(() => loadConfig()).catch(console.error)
-      return next
-    })
-  }, [])
+    const willActivate = !soloSet.has(key)
+    const next = new Set(soloSet)
+    if (willActivate) next.add(key); else next.delete(key)
+    setSoloSet(next)
+    invoke('set_strip_solo', { id, isInput, solo: willActivate })
+      .then(() => loadConfig())
+      .catch(e => { setSoloSet(soloSet); handleError(e) })
+  }, [soloSet, handleError])
 
   const handleMidiSoloToggle = useCallback((id) => {
     const key = `midi-${id}`
-    setSoloSet(prev => {
-      const next = new Set(prev)
-      const willActivate = !next.has(key)
-      if (willActivate) next.add(key); else next.delete(key)
-      invoke('midi_channel_set_solo', { id, solo: willActivate }).then(() => loadConfig()).catch(console.error)
-      return next
-    })
-  }, [])
+    const willActivate = !soloSet.has(key)
+    const next = new Set(soloSet)
+    if (willActivate) next.add(key); else next.delete(key)
+    setSoloSet(next)
+    invoke('midi_channel_set_solo', { id, solo: willActivate })
+      .then(() => loadConfig())
+      .catch(e => { setSoloSet(soloSet); handleError(e) })
+  }, [soloSet, handleError])
 
   const handleMidiRemove = useCallback((id) => {
     invoke('midi_channel_remove', { id }).then(() => {
@@ -234,6 +263,15 @@ export default function Mixer({ graph }) {
         </div>
       </div>
 
+      {error && (
+        <div
+          role="alert"
+          className="mx-4 mt-2 rounded-sm border border-[#ff6b6e]/40 bg-[#ff6b6e]/10 px-3 py-2 text-[10px] text-[#ff9b9d]"
+        >
+          {error}
+        </div>
+      )}
+
       {/* ─── Mixer Grid (header rail + strips, subgrid rows) ─── */}
       <div className="flex-1 overflow-x-auto overflow-y-hidden" style={{ backgroundColor: PANEL_BG }}>
         <div
@@ -291,6 +329,9 @@ export default function Mixer({ graph }) {
                 isDragOverTarget={dragOverId === ch.id}
                 soloActive={soloSet.has(`in-${ch.id}`)}
                 onSoloToggle={handleSoloToggle}
+                onMonoToggle={handleMonoToggle}
+                onError={handleError}
+                onFaderDrag={onFaderDrag}
               />
             )
           })}
@@ -310,6 +351,8 @@ export default function Mixer({ graph }) {
                 onRemove={handleMidiRemove}
                 soloActive={soloSet.has(`midi-${ch.id}`)}
                 onSoloToggle={handleMidiSoloToggle}
+                onError={handleError}
+                onFaderDrag={onFaderDrag}
               />
             )
           })}
@@ -360,6 +403,8 @@ export default function Mixer({ graph }) {
                 soloActive={soloSet.has(`ret-${ret.id}`)}
                 onSoloToggle={handleSoloToggle}
                 letter={String.fromCharCode(65 + idx)}
+                onError={handleError}
+                onFaderDrag={onFaderDrag}
               />
             )
           })}
@@ -371,6 +416,8 @@ export default function Mixer({ graph }) {
             sinkNodes={sinkNodes}
             faderVal={getFader('master')}
             setFader={setFader}
+            onError={handleError}
+            onFaderDrag={onFaderDrag}
           />
         </div>
       </div>

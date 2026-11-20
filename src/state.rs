@@ -36,10 +36,10 @@ pub struct AppState {
     pub meter_handles: Arc<Mutex<HashMap<String, crate::meter::MeterHandle>>>,
     pub meter_tx: async_channel::Sender<crate::meter::MeterSample>,
     /// Soundboard: persisted list of uploaded sounds.
-    pub soundboard_config: Arc<Mutex<SoundboardConfig>>,
-    /// Currently playing `paplay` children, one per Play click. Reaped on
-    /// next Play and on Stop-all. Drop kills survivors at process exit.
-    pub soundboard_procs: Arc<Mutex<Vec<std::process::Child>>>,
+    pub soundboard_config: Arc<parking_lot::Mutex<SoundboardConfig>>,
+    /// Currently playing `ffmpeg`/`paplay` children, one pair per Play click.
+    /// Reaped on next Play and on Stop-all. Drop kills survivors at process exit.
+    pub soundboard_procs: Arc<parking_lot::Mutex<Vec<std::process::Child>>>,
     /// In-process VST3 plugin host per MIDI channel id (see `src/midi/`).
     /// Spawned lazily when the user loads a plugin; torn down on channel
     /// removal / app exit. Replaces the old Carla-subprocess-over-OSC
@@ -49,13 +49,4 @@ pub struct AppState {
     /// Background MIDI input bridge that forwards keyboard events to all
     /// loaded plugin hosts.
     pub midi_input_router: Arc<Mutex<Option<crate::midi::input::MidiInputRouterHandle>>>,
-    /// X11 window id of audibian's main toplevel. Captured at setup so the
-    /// MIDI rack can reparent plugin GUIs into it. Zero on Wayland or when
-    /// the handle couldn't be resolved.
-    #[cfg(target_os = "linux")]
-    pub main_xid: Arc<Mutex<u32>>,
-    /// Track which plugin windows we've embedded so subsequent move/resize
-    /// calls know the target XID. Key = (channel_id, plugin_id).
-    #[cfg(target_os = "linux")]
-    pub embedded_plugin_windows: Arc<Mutex<HashMap<(u32, u32), u32>>>,
 }

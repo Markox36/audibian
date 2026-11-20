@@ -1,4 +1,4 @@
-import React from 'react'
+import React, { useEffect, useState } from 'react'
 import { invoke } from '@tauri-apps/api/core'
 import { Settings as SettingsIcon, Monitor } from 'lucide-react'
 
@@ -15,14 +15,30 @@ const SCALE_PRESETS = [
 ]
 
 export default function Settings({ uiScale, onScaleChange }) {
-  const save = async (scale) => {
-    onScaleChange(scale)
+  const [autostart, setAutostart] = useState(false)
+
+  useEffect(() => {
+    invoke('get_app_config').then(cfg => setAutostart(!!cfg.autostart)).catch(console.error)
+  }, [])
+
+  // Always round-trips the whole config so the other fields survive the save.
+  const saveField = async (patch) => {
     try {
       const cfg = await invoke('get_app_config')
-      await invoke('save_app_config', { config: { ...cfg, ui_scale: scale } })
+      await invoke('save_app_config', { config: { ...cfg, ...patch } })
     } catch (e) {
       console.error('save_app_config failed', e)
     }
+  }
+
+  const save = (scale) => {
+    onScaleChange(scale)
+    saveField({ ui_scale: scale })
+  }
+
+  const toggleAutostart = (next) => {
+    setAutostart(next)
+    saveField({ autostart: next })
   }
 
   return (
@@ -62,6 +78,19 @@ export default function Settings({ uiScale, onScaleChange }) {
             <span>Current Scale:</span>
             <span className="font-bold text-neutral-400">{Math.round(uiScale * 100)}%</span>
           </div>
+
+          <label className="flex items-center justify-between gap-3 text-xs mt-2 pt-4 border-t border-white/[0.08] cursor-pointer">
+            <span className="flex flex-col gap-1">
+              <span className="font-semibold text-neutral-300">Start with the session</span>
+              <span className="text-[11px] text-neutral-500">Creates an XDG autostart entry</span>
+            </span>
+            <input
+              type="checkbox"
+              checked={autostart}
+              onChange={e => toggleAutostart(e.target.checked)}
+              className="h-4 w-4 accent-[#45d99a] cursor-pointer"
+            />
+          </label>
         </div>
       </div>
     </div>

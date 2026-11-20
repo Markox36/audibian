@@ -1,6 +1,7 @@
-import React, { useEffect, useRef } from 'react'
+import React, { useEffect, useMemo, useRef } from 'react'
 import { CREAM, DB_TICKS, GREEN, RAIL_TEXT, RED } from './theme'
 import { subscribeBars } from './meterStore'
+import { createRafSend } from './rafSend'
 
 // Volume fader and level meters, side by side.
 //
@@ -32,10 +33,13 @@ const TRAVEL_PAD = 4
 // `nodeName` is the PipeWire sink the bars follow. Levels are NOT props: the
 // meter store writes the two bar elements directly, so a level change costs
 // two style writes instead of a React render of this strip. See meterStore.js.
-function MeterFader({ value, onChange, nodeName }) {
+// `onChange` updates the on-screen value on every move; `onCommit` is the
+// backend write and is coalesced to one per frame (see rafSend.js).
+function MeterFader({ value, onChange, onCommit, onDragState, nodeName, label = 'Volume' }) {
   const containerRef = useRef(null)
   const barLRef = useRef(null)
   const barRRef = useRef(null)
+  const send = useMemo(createRafSend, [])
 
   useEffect(
     () => subscribeBars(nodeName, barLRef.current, barRRef.current),
@@ -45,6 +49,11 @@ function MeterFader({ value, onChange, nodeName }) {
   const pct = Math.min(1, Math.max(0, (value - FADER_MIN) / (FADER_MAX - FADER_MIN)))
   const unityPct = (FADER_UNITY - FADER_MIN) / (FADER_MAX - FADER_MIN)
 
+  const apply = (next) => {
+    onChange(next)
+    send.queue(() => onCommit(next))
+  }
+
   const startDrag = (e) => {
     e.preventDefault()
     const cont = containerRef.current
@@ -52,17 +61,27 @@ function MeterFader({ value, onChange, nodeName }) {
     const rect = cont.getBoundingClientRect()
     const startY = e.clientY
     const startVal = value
+    onDragState?.(true)
     const onMove = (ev) => {
       const dy = startY - ev.clientY
-      const next = Math.max(FADER_MIN, Math.min(FADER_MAX, startVal + (dy / rect.height) * FADER_MAX))
-      onChange(next)
+      apply(Math.max(FADER_MIN, Math.min(FADER_MAX, startVal + (dy / rect.height) * FADER_MAX)))
     }
     const onUp = () => {
       window.removeEventListener('mousemove', onMove)
       window.removeEventListener('mouseup', onUp)
+      send.flush()
+      onDragState?.(false)
     }
     window.addEventListener('mousemove', onMove)
     window.addEventListener('mouseup', onUp)
+  }
+
+  const onKeyDown = (e) => {
+    const step = { ArrowUp: 1, ArrowRight: 1, ArrowDown: -1, ArrowLeft: -1, PageUp: 10, PageDown: -10 }[e.key]
+    if (step === undefined && e.key !== 'Home') return
+    e.preventDefault()
+    if (e.key === 'Home') apply(FADER_UNITY)
+    else apply(Math.max(FADER_MIN, Math.min(FADER_MAX, value + step)))
   }
 
   // The fill is a full-height element scaled from its bottom edge. Animating
@@ -85,6 +104,13 @@ function MeterFader({ value, onChange, nodeName }) {
     <div
       ref={containerRef}
       onMouseDown={startDrag}
+      onKeyDown={onKeyDown}
+      role="slider"
+      tabIndex={0}
+      aria-label={label}
+      aria-valuemin={FADER_MIN}
+      aria-valuemax={FADER_MAX}
+      aria-valuenow={Math.round(value)}
       className="relative flex h-full w-full select-none cursor-ns-resize gap-1 rounded-sm border border-white/[0.09] bg-white/[0.04] px-1 pb-3 pt-1.5"
       style={{ minHeight: 0 }}
     >

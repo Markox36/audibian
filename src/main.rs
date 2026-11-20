@@ -1,4 +1,5 @@
 mod audio;
+mod config_io;
 mod profiles;
 mod commands;
 mod state;
@@ -9,8 +10,6 @@ mod midi;
 mod persistent;
 mod proc;
 mod soundboard;
-#[cfg(target_os = "linux")]
-mod x11_embed;
 
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
@@ -41,6 +40,33 @@ fn main() {
     if std::env::var_os("WEBKIT_DISABLE_COMPOSITING_MODE").is_none() {
         // SAFETY: set before any WebKit/GTK init below.
         unsafe { std::env::set_var("WEBKIT_DISABLE_COMPOSITING_MODE", "1"); }
+    }
+
+    // Windows VST2/VST3 plugins bridged through yabridge need Wine — but
+    // yabridge (as of 5.1.1) only works reliably against Wine <= 9.21; Wine
+    // 10+ (including the staging builds most distros ship today) changed
+    // window embedding enough that the bridged plugin process hangs or
+    // crashes on load. Downgrading the system's default `wine` would break
+    // everything else that uses it, so instead: if the user has dropped a
+    // pinned Wine build at `~/.local/share/audibian/wine-yabridge/bin/wine`
+    // (see README), point yabridge at it and at a dedicated prefix, without
+    // touching `WINEPREFIX`/`WINELOADER` if the user already set them. Purely
+    // additive — native (non-Wine) VST3 plugins never look at these vars.
+    if let Ok(home) = std::env::var("HOME") {
+        let wine_dir = std::path::PathBuf::from(&home).join(".local/share/audibian/wine-yabridge");
+        let wine_bin = wine_dir.join("bin/wine");
+        if wine_bin.is_file() {
+            if std::env::var_os("WINELOADER").is_none() {
+                // SAFETY: set before any child process (yabridge's Wine host) spawns.
+                unsafe { std::env::set_var("WINELOADER", &wine_bin); }
+            }
+            if std::env::var_os("WINEPREFIX").is_none() {
+                let prefix = std::path::PathBuf::from(&home)
+                    .join(".local/share/audibian/wine-yabridge-prefix");
+                // SAFETY: set before any child process (yabridge's Wine host) spawns.
+                unsafe { std::env::set_var("WINEPREFIX", prefix); }
+            }
+        }
     }
 
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info")).init();
@@ -76,6 +102,10 @@ fn main() {
             // instead of growing an unbounded queue until memory runs out.
             let (meter_tx, meter_rx) = async_channel::bounded::<meter::MeterSample>(512);
             let meter_handles = Arc::new(Mutex::new(HashMap::<String, meter::MeterHandle>::new()));
+
+            // Drop filter-chain configs left behind by a previous run before
+            // any new instance writes one.
+            audio::effects::cleanup_orphaned_eq_sinks();
 
             // Re-apply low-latency PipeWire drop-in if user enabled it last session.
             commands::apply_low_latency_conf(AppConfig::load().low_latency);
@@ -116,13 +146,22 @@ fn main() {
                 let cfg_clone = mixer_cfg.clone();
                 std::thread::spawn(move || {
                     let restored = persistent::apply_persistent_state(&cfg_clone);
-                    *m_null.lock().unwrap() = restored.master_null_module;
-                    *m_loop.lock().unwrap() = restored.master_loopback_module;
-                    *inp_ids.lock().unwrap() = restored.input_module_ids;
-                    *ret_ids.lock().unwrap() = restored.return_module_ids;
-                    *snd_ids.lock().unwrap() = restored.send_module_ids;
-                    *src_ids.lock().unwrap() = restored.input_source_ids;
-                    *seq_instances.lock().unwrap() = restored.strip_eq_instances;
+                    // Merge, never assign: a channel the user adds during the
+                    // ~1 s restore would otherwise lose its module id here and
+                    // could never be unloaded again.
+                    {
+                        let mut slot = m_null.lock().unwrap();
+                        if slot.is_none() { *slot = restored.master_null_module; }
+                    }
+                    {
+                        let mut slot = m_loop.lock().unwrap();
+                        if slot.is_none() { *slot = restored.master_loopback_module; }
+                    }
+                    inp_ids.lock().unwrap().extend(restored.input_module_ids);
+                    ret_ids.lock().unwrap().extend(restored.return_module_ids);
+                    snd_ids.lock().unwrap().extend(restored.send_module_ids);
+                    src_ids.lock().unwrap().extend(restored.input_source_ids);
+                    seq_instances.lock().unwrap().extend(restored.strip_eq_instances);
                 });
             }
 
@@ -144,33 +183,12 @@ fn main() {
                 strip_eq_instances,
                 meter_handles,
                 meter_tx,
-                soundboard_config: Arc::new(Mutex::new(soundboard_cfg)),
-                soundboard_procs: Arc::new(Mutex::new(Vec::new())),
+                soundboard_config: Arc::new(parking_lot::Mutex::new(soundboard_cfg)),
+                soundboard_procs: Arc::new(parking_lot::Mutex::new(Vec::new())),
                 midi_plugin_hosts,
                 midi_input_router,
-                #[cfg(target_os = "linux")]
-                main_xid: Arc::new(Mutex::new(0)),
-                #[cfg(target_os = "linux")]
-                embedded_plugin_windows: Arc::new(Mutex::new(HashMap::new())),
             };
             app.manage(state);
-
-            // Resolve the main toplevel's X11 window id from the raw window
-            // handle. Stored in AppState so the MIDI rack can later reparent
-            // plugin GUIs into us. Zero on Wayland or if the handle is not
-            // an Xlib handle (which means embedding is unavailable).
-            #[cfg(target_os = "linux")]
-            if let Some(win) = app.get_webview_window("main") {
-                use raw_window_handle::{HasWindowHandle, RawWindowHandle};
-                if let Ok(handle) = win.window_handle() {
-                    if let RawWindowHandle::Xlib(xh) = handle.as_raw() {
-                        let xid = xh.window as u32;
-                        if xid != 0 {
-                            *app.state::<AppState>().main_xid.lock().unwrap() = xid;
-                        }
-                    }
-                }
-            }
 
             // Bridge: meter peaks → one batched `pw-node-peaks` event per frame.
             //
@@ -276,7 +294,9 @@ fn main() {
                         }
                     }
                     "quit" => {
-                        commands::cleanup_stale_modules();
+                        // `exit` runs no destructors, so every child process
+                        // and every pactl-level override has to go first.
+                        commands::shutdown(&app.state::<AppState>());
                         app.exit(0);
                     }
                     _ => {}
@@ -373,10 +393,6 @@ fn main() {
             commands::midi_channel_set_solo,
             commands::midi_plugin_show_native_gui,
             commands::midi_plugin_hide_native_gui,
-            commands::midi_plugin_embed_gui,
-            commands::midi_plugin_position_gui,
-            commands::midi_plugin_unembed_gui,
-            commands::midi_embed_available,
         ])
         .run(tauri::generate_context!())
         .expect("error running tauri application");
@@ -385,6 +401,8 @@ fn main() {
 fn handle_pw_event(event: PwEvent, graph: &Arc<Mutex<AudioGraph>>, app: &tauri::AppHandle) {
     match event {
         PwEvent::NodeAdded(node) => {
+            // Sink ids shift as nodes come and go.
+            crate::commands::invalidate_sink_id_cache();
             app.emit("pw-node-added", &node).ok();
             graph.lock().unwrap().add_node(node.clone());
 
@@ -426,80 +444,43 @@ fn handle_pw_event(event: PwEvent, graph: &Arc<Mutex<AudioGraph>>, app: &tauri::
                     }
                 }
 
-                // Input channel sink appears → force-loopback its monitor to
-                // audibian_master so every input always reaches the master.
+                // Restore the optional input-monitor → master route after the
+                // sink ports appear; a NodeAdded delay alone can race them.
                 let input_ch = mixer_cfg.input_channels.iter()
-                    .find(|c| c.sink_name == node.name)
+                    .find(|c| c.sink_name == node.name && c.send_to_master)
                     .cloned();
                 if let Some(ch) = input_ch {
-                    let app_clone = app.clone();
                     let sink_name = ch.sink_name.clone();
                     std::thread::spawn(move || {
-                        std::thread::sleep(std::time::Duration::from_millis(300));
-                        let state = app_clone.state::<crate::state::AppState>();
-                        let graph = state.graph.lock().unwrap();
-                        crate::commands::connect_nodes(
-                            &graph, &sink_name,
-                            crate::commands::MASTER_SINK_NAME,
-                            &state.pw, false,
-                        );
+                        crate::commands::connect_monitor_to_master(&sink_name);
                     });
                 }
 
-                // Same for MIDI/plugin channel sinks. This is the mechanism
-                // that actually matters for them: their sink is created at
-                // `midi_channel_add` time, long before a plugin is loaded and
-                // starts producing audio, so unlike input channels there's no
-                // guarantee this NodeAdded fires anywhere near channel
-                // creation — it just needs to fire once, whenever the node
-                // shows up, which this handler guarantees regardless of
-                // system load (a single fixed-delay attempt at creation time
-                // does not).
+                // MIDI/plugin channels use the same retrying monitor route.
                 let midi_ch = mixer_cfg.midi_channels.iter()
                     .find(|c| c.sink_name == node.name)
                     .cloned();
                 if let Some(ch) = midi_ch {
-                    let app_clone = app.clone();
                     let sink_name = ch.sink_name.clone();
                     std::thread::spawn(move || {
-                        std::thread::sleep(std::time::Duration::from_millis(300));
-                        let state = app_clone.state::<crate::state::AppState>();
-                        let graph = state.graph.lock().unwrap();
-                        crate::commands::connect_nodes(
-                            &graph, &sink_name,
-                            crate::commands::MASTER_SINK_NAME,
-                            &state.pw, false,
-                        );
+                        crate::commands::connect_monitor_to_master(&sink_name);
                     });
                 }
 
                 if node.name == crate::commands::MASTER_SINK_NAME {
-                    let app_clone = app.clone();
-                    // Returns NEVER auto-route to master — only inputs do.
-                    let returns: Vec<String> = Vec::new();
-                    let inputs: Vec<String> = mixer_cfg.input_channels.iter()
-                        .map(|c| c.sink_name.clone())
-                        .chain(mixer_cfg.midi_channels.iter().map(|c| c.sink_name.clone()))
-                        .collect();
-                    std::thread::spawn(move || {
-                        std::thread::sleep(std::time::Duration::from_millis(300));
-                        let state = app_clone.state::<crate::state::AppState>();
-                        let graph = state.graph.lock().unwrap();
-                        for src in &returns {
-                            crate::commands::connect_nodes(
-                                &graph, src,
-                                crate::commands::MASTER_SINK_NAME,
-                                &state.pw, false,
-                            );
-                        }
-                        for src in &inputs {
-                            crate::commands::connect_nodes(
-                                &graph, src,
-                                crate::commands::MASTER_SINK_NAME,
-                                &state.pw, false,
-                            );
-                        }
-                    });
+                    for ch in mixer_cfg.input_channels.iter().filter(|c| c.send_to_master) {
+                        let sink_name = ch.sink_name.clone();
+                        std::thread::spawn(move || {
+                            crate::commands::connect_monitor_to_master(&sink_name);
+                        });
+                    }
+
+                    for ch in &mixer_cfg.midi_channels {
+                        let sink_name = ch.sink_name.clone();
+                        std::thread::spawn(move || {
+                            crate::commands::connect_monitor_to_master(&sink_name);
+                        });
+                    }
                 }
 
                 // 3b. Hardware master sink reappears → recreate the
@@ -552,6 +533,7 @@ fn handle_pw_event(event: PwEvent, graph: &Arc<Mutex<AudioGraph>>, app: &tauri::
             });
         }
         PwEvent::NodeRemoved(id) => {
+            crate::commands::invalidate_sink_id_cache();
             let removed_name = graph.lock().unwrap()
                 .nodes.get(&id).map(|n| n.name.clone());
             graph.lock().unwrap().remove_node(id);
@@ -605,14 +587,22 @@ fn handle_pw_event(event: PwEvent, graph: &Arc<Mutex<AudioGraph>>, app: &tauri::
                     .and_then(|n| n.media_class.as_deref())
                     .is_some_and(|c| c.starts_with("Stream/"))
             });
-            if let Some(stream_id) = stream_id {
+            let duplicate = stream_id.map(|stream_id| {
                 let mixer_cfg = state.mixer_config.lock().unwrap().clone();
                 let cut = crate::commands::enforce_single_route(
                     &g, &state.pw, &mixer_cfg, stream_id,
                 );
+                let stream_name = g.nodes.get(&stream_id)
+                    .map(|n| n.name.clone()).unwrap_or_default();
+                (stream_name, cut)
+            });
+            // Saving the matrix serialises TOML and hits the disk. Never with
+            // the graph lock held: every command that reads the graph would
+            // queue behind that write.
+            drop(g);
+
+            if let Some((stream_name, cut)) = duplicate {
                 if !cut.is_empty() {
-                    let stream_name = g.nodes.get(&stream_id)
-                        .map(|n| n.name.clone()).unwrap_or_default();
                     debug!("'{stream_name}': dropped duplicate route(s) to/from {cut:?}");
                     // Drop the offending pairs from matrix.toml too, so they
                     // are not resurrected on the next launch of the app.

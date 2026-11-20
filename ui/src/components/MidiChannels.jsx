@@ -22,19 +22,14 @@ const FORMATS = ["VST3"];
 
 export default function MidiChannels() {
   const [channels, setChannels] = useState([]);
-  const [embedAvailable, setEmbedAvailable] = useState(false);
   const [newName, setNewName] = useState("");
   const [adding, setAdding] = useState(null); // { channel_id, format, identifier, name }
 
   const refresh = useCallback(() => {
     invoke("midi_channel_list").then(setChannels).catch(console.error);
   }, []);
-
   useEffect(() => {
     refresh();
-    invoke("midi_embed_available")
-      .then(setEmbedAvailable)
-      .catch(() => setEmbedAvailable(false));
   }, [refresh]);
 
   const handleAddChannel = async () => {
@@ -87,34 +82,15 @@ export default function MidiChannels() {
       .catch(console.error);
   };
 
-  const [embedded, setEmbedded] = useState({}); // key `${channelId}:${pluginId}` → true
-
-  const showPluginGui = async (channelId, pluginId) => {
-    await invoke("midi_plugin_show_native_gui", { channelId, pluginId }).catch(
+  const showPluginGui = (channelId, pluginId) =>
+    invoke("midi_plugin_show_native_gui", { channelId, pluginId }).catch(
       console.error,
     );
-    // Only mount embed slot when the session supports it. On Wayland the
-    // plugin window stays floating; user can drag it manually.
-    if (embedAvailable) {
-      setEmbedded((e) => ({ ...e, [`${channelId}:${pluginId}`]: true }));
-    }
-  };
 
-  const hidePluginGui = async (channelId, pluginId) => {
-    if (embedAvailable) {
-      await invoke("midi_plugin_unembed_gui", { channelId, pluginId }).catch(
-        () => {},
-      );
-    }
-    await invoke("midi_plugin_hide_native_gui", { channelId, pluginId }).catch(
+  const hidePluginGui = (channelId, pluginId) =>
+    invoke("midi_plugin_hide_native_gui", { channelId, pluginId }).catch(
       console.error,
     );
-    setEmbedded((e) => {
-      const next = { ...e };
-      delete next[`${channelId}:${pluginId}`];
-      return next;
-    });
-  };
 
   const reorderPlugins = (channelId, pluginIds) => {
     invoke("midi_plugin_reorder", { channelId, pluginIds })
@@ -157,13 +133,11 @@ export default function MidiChannels() {
         </div>
       </div>
 
-      {!embedAvailable && (
-        <div className="flex items-center gap-2 px-4 py-2 bg-[#4a6a8a]/10 border-b border-[#4a6a8a]/30 text-[10px] text-[#a9c4dd] font-mono shrink-0">
-          <AlertTriangle className="w-3.5 h-3.5" />
-          Native plugin GUIs aren't wired up yet — loaded plugins now receive
-          live MIDI from connected keyboards.
-        </div>
-      )}
+      <div className="flex items-center gap-2 px-4 py-2 bg-[#4a6a8a]/10 border-b border-[#4a6a8a]/30 text-[10px] text-[#a9c4dd] font-mono shrink-0">
+        <AlertTriangle className="w-3.5 h-3.5" />
+        Plugin GUIs open in their own window; loaded plugins receive live MIDI
+        from connected keyboards.
+      </div>
 
       <div className="flex-1 overflow-y-auto p-4">
         {channels.length === 0 ? (
@@ -199,7 +173,6 @@ export default function MidiChannels() {
                 onReorderPlugins={reorderPlugins}
                 onShowPluginGui={showPluginGui}
                 onHidePluginGui={hidePluginGui}
-                embedded={embedded}
               />
             ))}
           </div>
@@ -306,7 +279,6 @@ function ChannelRow({
   onReorderPlugins,
   onShowPluginGui,
   onHidePluginGui,
-  embedded,
 }) {
   const [editing, setEditing] = useState(false);
   const [name, setName] = useState(channel.name);
@@ -481,80 +453,10 @@ function ChannelRow({
                   </button>
                 </div>
               </div>
-              {embedded[`${channel.id}:${p.id}`] && (
-                <PluginGuiSlot channelId={channel.id} pluginId={p.id} />
-              )}
             </React.Fragment>
           ))}
         </div>
       )}
-    </div>
-  );
-}
-
-// Reserved space for the embedded plugin window. Reports its on-screen
-// rect to the backend so the X11 plugin window stays glued to this div
-// even as the user scrolls or resizes audibian. Polls embed_gui until
-// the plugin window appears (Carla can take a beat to map it).
-function PluginGuiSlot({ channelId, pluginId }) {
-  const ref = React.useRef(null);
-  const [attached, setAttached] = useState(false);
-
-  useEffect(() => {
-    if (!ref.current) return;
-
-    const push = async (cmd) => {
-      const r = ref.current?.getBoundingClientRect();
-      if (!r || r.width <= 0 || r.height <= 0) return false;
-      try {
-        return await invoke(cmd, {
-          channelId,
-          pluginId,
-          x: Math.round(r.left),
-          y: Math.round(r.top),
-          width: Math.round(r.width),
-          height: Math.round(r.height),
-        });
-      } catch {
-        return false;
-      }
-    };
-
-    let cancelled = false;
-    let attempts = 0;
-    const tryEmbed = async () => {
-      if (cancelled) return;
-      const ok = await push("midi_plugin_embed_gui");
-      if (ok) {
-        setAttached(true);
-        return;
-      }
-      attempts += 1;
-      if (attempts > 30) return; // ~6s
-      setTimeout(tryEmbed, 200);
-    };
-    tryEmbed();
-
-    const reposition = () => push("midi_plugin_position_gui");
-    const ro = new ResizeObserver(reposition);
-    ro.observe(ref.current);
-    window.addEventListener("scroll", reposition, true);
-    window.addEventListener("resize", reposition);
-    return () => {
-      cancelled = true;
-      ro.disconnect();
-      window.removeEventListener("scroll", reposition, true);
-      window.removeEventListener("resize", reposition);
-    };
-  }, [channelId, pluginId]);
-
-  return (
-    <div
-      ref={ref}
-      className="w-full bg-black/40 border border-white/[0.05] rounded-sm flex items-center justify-center text-[9px] font-mono text-neutral-500"
-      style={{ height: 420 }}
-    >
-      {attached ? "" : "Waiting for plugin window…"}
     </div>
   );
 }

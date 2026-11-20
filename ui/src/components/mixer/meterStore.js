@@ -199,6 +199,9 @@ export function subscribeBars(nodeName, elL, elR) {
       barSubs.delete(nodeName)
       current.delete(nodeName)
       lastWritten.delete(nodeName)
+      // Otherwise `targets` keeps an entry for every node name seen this
+      // session; only the last subscriber of either kind may drop it.
+      if (!readoutSubs.has(nodeName)) targets.delete(nodeName)
     }
   }
 }
@@ -219,6 +222,7 @@ export function subscribeReadout(nodeName, el) {
     if (set.size === 0) {
       readoutSubs.delete(nodeName)
       lastWritten.delete(nodeName)
+      if (!barSubs.has(nodeName)) targets.delete(nodeName)
     }
   }
 }

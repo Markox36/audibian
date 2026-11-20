@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from 'react'
+import React, { useState, useMemo, useCallback } from 'react'
 import { invoke } from '@tauri-apps/api/core'
 import { Search, X, Unplug } from 'lucide-react'
 
@@ -16,6 +16,9 @@ const nodeColor = (mc) => {
 }
 
 const displayName = (n) => n.nick || n.description || n.app_name || n.name
+
+// Stable empty array so a node without ports doesn't produce a new value.
+const EMPTY_PORTS = []
 
 // Hide audibian-managed plumbing from the Matrix view: every virtual sink
 // we create (audibian_master, audibian_<channel>, audibian_<return>,
@@ -46,13 +49,30 @@ export default function Matrix({ graph, onCreateLink, onDestroyLink }) {
   const [direction, setDirection] = useState('outputs')
   const [selectedId, setSelectedId] = useState(null)
   const [search, setSearch] = useState('')
+  const [error, setError] = useState('')
+  const fail = (e) => setError(String(e))
 
   const sideDir = direction === 'outputs' ? 'Output' : 'Input'
   const otherDir = direction === 'outputs' ? 'Input' : 'Output'
 
-  const portsOf = (nodeId, dir) =>
-    ports.filter(p => p.node_id === nodeId && p.direction === dir)
-      .sort((a, b) => a.port_index - b.port_index)
+  // Ports grouped once per graph change: the detail view asks for a node's
+  // ports on every render, and re-filtering the whole port list each time is
+  // O(nodes × ports) on every PipeWire event.
+  const portsIndex = useMemo(() => {
+    const m = new Map()
+    for (const p of ports) {
+      const k = `${p.node_id}-${p.direction}`
+      const arr = m.get(k)
+      if (arr) arr.push(p)
+      else m.set(k, [p])
+    }
+    for (const arr of m.values()) arr.sort((a, b) => a.port_index - b.port_index)
+    return m
+  }, [ports])
+  const portsOf = useCallback(
+    (nodeId, dir) => portsIndex.get(`${nodeId}-${dir}`) ?? EMPTY_PORTS,
+    [portsIndex]
+  )
 
   const sidebarNodes = useMemo(() => {
     const q = search.toLowerCase().trim()
@@ -104,92 +124,100 @@ export default function Matrix({ graph, onCreateLink, onDestroyLink }) {
     const [outId, inId] = linkIdOf(myPort, otherPort)
     return linkLookup.has(`${outId}-${inId}`)
   }
+  // Persist the expected link set only once the graph change actually
+  // succeeded; otherwise a failed link is saved and reapplied at startup.
   const toggleConn = (myPort, otherPort) => {
     const [outId, inId] = linkIdOf(myPort, otherPort)
     const link = linkLookup.get(`${outId}-${inId}`)
-    if (link) onDestroyLink(link.id)
-    else onCreateLink(outId, inId)
+    const op = link ? onDestroyLink(link.id) : onCreateLink(outId, inId)
 
-    // Compute expected new state for this node pair and persist
     const otherNode = nodes.find(n => n.id === otherPort.node_id)
-    if (otherNode && effectiveSelected) {
-      const isNowConn = !link
-      const otherPorts = portsOf(otherNode.id, otherDir)
+    if (!otherNode || !effectiveSelected) return
+    const isNowConn = !link
+    const otherPorts = portsOf(otherNode.id, otherDir)
+    op.then(() => {
       const newLinks = []
       for (const mp of myPorts) {
-        for (const op of otherPorts) {
-          const [oId, iId] = linkIdOf(mp, op)
+        for (const op2 of otherPorts) {
+          const [oId, iId] = linkIdOf(mp, op2)
           let conn = linkLookup.has(`${oId}-${iId}`)
-          if (mp.id === myPort.id && op.id === otherPort.id) conn = isNowConn
+          if (mp.id === myPort.id && op2.id === otherPort.id) conn = isNowConn
           if (conn) {
             newLinks.push([
-              sideDir === 'Output' ? mp.name : op.name,
-              sideDir === 'Output' ? op.name : mp.name,
+              sideDir === 'Output' ? mp.name : op2.name,
+              sideDir === 'Output' ? op2.name : mp.name,
             ])
           }
         }
       }
       saveNodePair(otherNode, newLinks)
-    }
+    }).catch(fail)
   }
 
   const clearNode = () => {
     if (!effectiveSelected) return
     const myPortIds = new Set(portsOf(effectiveSelected.id, sideDir).map(p => p.id))
+    const ops = []
     for (const l of links) {
       const id = sideDir === 'Output' ? l.output_port_id : l.input_port_id
-      if (myPortIds.has(id)) onDestroyLink(l.id)
+      if (myPortIds.has(id)) ops.push(onDestroyLink(l.id))
     }
     // Wipe persisted connections for all pairs involving this node
+    Promise.all(ops)
+      .then(() => { for (const other of otherNodes) saveNodePair(other, []) })
+      .catch(fail)
+  }
+
+  const myPorts = effectiveSelected ? portsOf(effectiveSelected.id, sideDir) : EMPTY_PORTS
+
+  // One pass over the visible targets instead of recomputing the mode twice
+  // per target button on every render.
+  const connModes = useMemo(() => {
+    const modes = new Map()
     for (const other of otherNodes) {
-      saveNodePair(other, [])
-    }
-  }
-
-
-
-  const myPorts = effectiveSelected ? portsOf(effectiveSelected.id, sideDir) : []
-
-  const getConnMode = (targetNodeId) => {
-    const targetPorts = portsOf(targetNodeId, otherDir)
-    if (myPorts.length === 0 || targetPorts.length === 0) return 'none'
-
-    let connCount = 0
-    const totalPairs = myPorts.length * targetPorts.length
-    for (const mp of myPorts) {
-      for (const tp of targetPorts) {
-        if (isConnected(mp, tp)) connCount++
+      const targetPorts = portsOf(other.id, otherDir)
+      if (myPorts.length === 0 || targetPorts.length === 0) { modes.set(other.id, 'none'); continue }
+      let count = 0
+      for (const mp of myPorts) {
+        for (const tp of targetPorts) {
+          if (isConnected(mp, tp)) count++
+        }
       }
+      let mode
+      if (count === 0) mode = 'none'
+      // All×all = mono mode
+      else if (count === myPorts.length * targetPorts.length) mode = 'mono'
+      else {
+        // L→L + R→R only = stereo
+        const hasL2L = isConnected(myPorts[0], targetPorts[0])
+        const hasR2R = myPorts.length >= 2 && targetPorts.length >= 2 && isConnected(myPorts[1], targetPorts[1])
+        mode = hasL2L && hasR2R && count === 2 ? 'stereo' : 'mixed'
+      }
+      modes.set(other.id, mode)
     }
-
-    if (connCount === 0) return 'none'
-    // All×all = mono mode
-    if (connCount === totalPairs) return 'mono'
-    // L→L + R→R only = stereo
-    const hasL2L = isConnected(myPorts[0], targetPorts[0])
-    const hasR2R = myPorts.length >= 2 && targetPorts.length >= 2 && isConnected(myPorts[1], targetPorts[1])
-    if (hasL2L && hasR2R && connCount === 2) return 'stereo'
-    return 'mixed'
-  }
+    return modes
+  }, [otherNodes, portsOf, otherDir, myPorts, linkLookup, sideDir])
 
   const saveNodePair = (targetNode, newLinks) => {
     if (!effectiveSelected || !targetNode) return
     const srcName = sideDir === 'Output' ? effectiveSelected.name : targetNode.name
     const dstName = sideDir === 'Output' ? targetNode.name : effectiveSelected.name
-    invoke('save_matrix_connections', { srcNode: srcName, dstNode: dstName, links: newLinks }).catch(console.error)
+    invoke('save_matrix_connections', { srcNode: srcName, dstNode: dstName, links: newLinks }).catch(fail)
   }
 
   const clearPairLinks = (targetNodeId) => {
     const targetPorts = portsOf(targetNodeId, otherDir)
     const targetPortIds = new Set(targetPorts.map(p => p.id))
     const myPortIds = new Set(myPorts.map(p => p.id))
+    const ops = []
     for (const l of links) {
       const myId = sideDir === 'Output' ? l.output_port_id : l.input_port_id
       const otherId = sideDir === 'Output' ? l.input_port_id : l.output_port_id
       if (myPortIds.has(myId) && targetPortIds.has(otherId)) {
-        onDestroyLink(l.id)
+        ops.push(onDestroyLink(l.id))
       }
     }
+    return ops
   }
 
   // Mono = all output ports → all input ports (L→L, L→R, R→L, R→R)
@@ -199,20 +227,20 @@ export default function Matrix({ graph, onCreateLink, onDestroyLink }) {
     if (!targetPorts.length) return
     const targetNode = nodes.find(n => n.id === targetNodeId)
 
-    clearPairLinks(targetNodeId)
+    const ops = clearPairLinks(targetNodeId)
 
     const newLinks = []
     for (const mp of myPorts) {
       for (const tp of targetPorts) {
         const [outId, inId] = linkIdOf(mp, tp)
-        onCreateLink(outId, inId)
+        ops.push(onCreateLink(outId, inId))
         newLinks.push([
           sideDir === 'Output' ? mp.name : tp.name,
           sideDir === 'Output' ? tp.name : mp.name,
         ])
       }
     }
-    saveNodePair(targetNode, newLinks)
+    Promise.all(ops).then(() => saveNodePair(targetNode, newLinks)).catch(fail)
   }
 
   const connectStereo = (targetNodeId) => {
@@ -220,18 +248,18 @@ export default function Matrix({ graph, onCreateLink, onDestroyLink }) {
     if (myPorts.length < 2 || targetPorts.length < 2) return
     const targetNode = nodes.find(n => n.id === targetNodeId)
 
-    clearPairLinks(targetNodeId)
+    const ops = clearPairLinks(targetNodeId)
 
     const newLinks = []
     for (let i = 0; i < 2; i++) {
       const [outId, inId] = linkIdOf(myPorts[i], targetPorts[i])
-      onCreateLink(outId, inId)
+      ops.push(onCreateLink(outId, inId))
       newLinks.push([
         sideDir === 'Output' ? myPorts[i].name : targetPorts[i].name,
         sideDir === 'Output' ? targetPorts[i].name : myPorts[i].name,
       ])
     }
-    saveNodePair(targetNode, newLinks)
+    Promise.all(ops).then(() => saveNodePair(targetNode, newLinks)).catch(fail)
   }
 
   if (!nodes.filter(isAudioNode).length) {
@@ -322,6 +350,14 @@ export default function Matrix({ graph, onCreateLink, onDestroyLink }) {
 
       {/* ── DETAIL ───────────────────────────────────────────────── */}
       <main className="flex-1 flex flex-col overflow-hidden">
+        {error && (
+          <div
+            role="alert"
+            className="mx-4 mt-2 rounded-sm border border-[#ff6b6e]/40 bg-[#ff6b6e]/10 px-3 py-2 text-[11px] text-[#ff9b9d]"
+          >
+            {error}
+          </div>
+        )}
         {!effectiveSelected ? (
           <div className="flex-1 flex items-center justify-center text-[#9a988c] text-sm">
             Select a node from the sidebar.
@@ -336,7 +372,7 @@ export default function Matrix({ graph, onCreateLink, onDestroyLink }) {
             isConnected={isConnected}
             toggleConn={toggleConn}
             clearNode={clearNode}
-            getConnMode={getConnMode}
+            connModes={connModes}
             connectMono={connectMono}
             connectStereo={connectStereo}
           />
@@ -346,7 +382,7 @@ export default function Matrix({ graph, onCreateLink, onDestroyLink }) {
   )
 }
 
-function Detail({
+const Detail = React.memo(function Detail({
   node,
   myPorts,
   otherNodes,
@@ -355,7 +391,7 @@ function Detail({
   isConnected,
   toggleConn,
   clearNode,
-  getConnMode,
+  connModes,
   connectMono,
   connectStereo,
 }) {
@@ -409,7 +445,7 @@ function Detail({
                     onClick={() => connectMono(other.id)}
                     disabled={!myPorts.length || !otherPorts.length}
                     className={`px-2 py-0.5 rounded border text-[10px] font-semibold transition-colors cursor-pointer disabled:opacity-40 disabled:cursor-default ${
-                      getConnMode(other.id) === 'mono'
+                      connModes.get(other.id) === 'mono'
                         ? 'bg-[#45d99a] border-[#45d99a] text-black'
                         : 'bg-white/[0.04] border-white/[0.08] text-[#9a988c] hover:text-[#eceade] hover:bg-white/[0.1]'
                     }`}
@@ -420,7 +456,7 @@ function Detail({
                     onClick={() => connectStereo(other.id)}
                     disabled={myPorts.length < 2 || otherPorts.length < 2}
                     className={`px-2 py-0.5 rounded border text-[10px] font-semibold transition-colors cursor-pointer disabled:opacity-40 disabled:cursor-default ${
-                      getConnMode(other.id) === 'stereo'
+                      connModes.get(other.id) === 'stereo'
                         ? 'bg-[#45d99a] border-[#45d99a] text-black'
                         : 'bg-white/[0.04] border-white/[0.08] text-[#9a988c] hover:text-[#eceade] hover:bg-white/[0.1]'
                     }`}
@@ -487,4 +523,4 @@ function Detail({
       </div>
     </>
   )
-}
+})

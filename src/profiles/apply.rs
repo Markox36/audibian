@@ -14,13 +14,10 @@ use super::model::AudioProfile;
 pub struct ApplyResult {
     /// Number of links successfully requested
     pub links_applied: usize,
-    /// Link specs that could not be resolved (node not found)
-    pub unresolved_links: Vec<String>,
 }
 
 pub fn apply_profile(profile: &AudioProfile, graph: &AudioGraph, pw: &PwThread) -> ApplyResult {
     let mut links_applied = 0;
-    let mut unresolved_links = Vec::new();
 
     // Build a name → node map for quick lookup
     let node_by_name: std::collections::HashMap<&str, &crate::audio::AudioNode> = graph
@@ -38,13 +35,6 @@ pub fn apply_profile(profile: &AudioProfile, graph: &AudioGraph, pw: &PwThread) 
                     "Profile '{}': output node '{}' not found",
                     profile.name, link_spec.output_node
                 );
-                unresolved_links.push(format!(
-                    "{}:{} → {}:{}",
-                    link_spec.output_node,
-                    link_spec.output_port,
-                    link_spec.input_node,
-                    link_spec.input_port,
-                ));
                 continue;
             }
         };
@@ -57,13 +47,6 @@ pub fn apply_profile(profile: &AudioProfile, graph: &AudioGraph, pw: &PwThread) 
                     "Profile '{}': input node '{}' not found",
                     profile.name, link_spec.input_node
                 );
-                unresolved_links.push(format!(
-                    "{}:{} → {}:{}",
-                    link_spec.output_node,
-                    link_spec.output_port,
-                    link_spec.input_node,
-                    link_spec.input_port,
-                ));
                 continue;
             }
         };
@@ -98,21 +81,11 @@ pub fn apply_profile(profile: &AudioProfile, graph: &AudioGraph, pw: &PwThread) 
                     "Profile '{}': ports not found for {}→{}",
                     profile.name, link_spec.output_node, link_spec.input_node
                 );
-                unresolved_links.push(format!(
-                    "{}:{} → {}:{}",
-                    link_spec.output_node,
-                    link_spec.output_port,
-                    link_spec.input_node,
-                    link_spec.input_port,
-                ));
             }
         }
     }
 
-    ApplyResult {
-        links_applied,
-        unresolved_links,
-    }
+    ApplyResult { links_applied }
 }
 
 /// Capture the current graph state as a profile snapshot.

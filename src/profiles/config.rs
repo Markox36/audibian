@@ -44,39 +44,17 @@ impl Default for AppConfig {
 impl AppConfig {
     /// Load from `~/.config/audibian/config.toml`, returning defaults on error.
     pub fn load() -> Self {
-        let path = config_path();
-        let content = match fs::read_to_string(&path) {
-            Ok(c) => c,
-            Err(_) => return Self::default(),
-        };
-        toml::from_str(&content).unwrap_or_else(|e| {
-            warn!("Cannot parse app config: {e}");
-            Self::default()
-        })
+        crate::config_io::load_toml(&config_path()).unwrap_or_default()
     }
 
     /// Persist to `~/.config/audibian/config.toml`.
     pub fn save(&self) -> bool {
         let path = config_path();
-        if let Some(parent) = path.parent() {
-            let _ = fs::create_dir_all(parent);
+        if !crate::config_io::save_toml(&path, self) {
+            return false;
         }
-        match toml::to_string_pretty(self) {
-            Ok(content) => match fs::write(&path, content) {
-                Ok(_) => {
-                    info!("App config saved to {path:?}");
-                    true
-                }
-                Err(e) => {
-                    error!("Cannot write app config: {e}");
-                    false
-                }
-            },
-            Err(e) => {
-                error!("Cannot serialize app config: {e}");
-                false
-            }
-        }
+        info!("App config saved to {path:?}");
+        true
     }
 
     /// Write or remove the XDG autostart `.desktop` file so the desktop

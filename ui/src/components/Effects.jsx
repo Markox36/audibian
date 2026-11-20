@@ -113,14 +113,21 @@ function EqCurve({ bands }) {
     ctx.lineTo(W, H / 2)
     ctx.stroke()
 
-    // Fill under curve (Orange gradient glow)
-    ctx.beginPath()
+    // One pass over the curve, reused by the fill and the stroke: each sample
+    // runs 5 biquads, so computing it twice doubled the cost of every slider
+    // tick.
+    const ys = new Float32Array(W)
     for (let x = 0; x < W; x++) {
       const f = 20 * Math.pow(20000 / 20, x / W)
       const db = combinedMagnitudeDb(bands, f, fs)
-      const y = H / 2 - (db / 24) * (H / 2 - 8)
-      if (x === 0) ctx.moveTo(x, y)
-      else ctx.lineTo(x, y)
+      ys[x] = H / 2 - (db / 24) * (H / 2 - 8)
+    }
+
+    // Fill under curve (Orange gradient glow)
+    ctx.beginPath()
+    for (let x = 0; x < W; x++) {
+      if (x === 0) ctx.moveTo(x, ys[x])
+      else ctx.lineTo(x, ys[x])
     }
     ctx.lineTo(W, H / 2)
     ctx.lineTo(0, H / 2)
@@ -133,11 +140,8 @@ function EqCurve({ bands }) {
     ctx.lineWidth = 2
     ctx.beginPath()
     for (let x = 0; x < W; x++) {
-      const f = 20 * Math.pow(20000 / 20, x / W)
-      const db = combinedMagnitudeDb(bands, f, fs)
-      const y = H / 2 - (db / 24) * (H / 2 - 8)
-      if (x === 0) ctx.moveTo(x, y)
-      else ctx.lineTo(x, y)
+      if (x === 0) ctx.moveTo(x, ys[x])
+      else ctx.lineTo(x, ys[x])
     }
     ctx.stroke()
   }, [bands])
@@ -211,6 +215,9 @@ export default function Effects({ graph }) {
   }
 
   const updateBand = (idx, field, value) => {
+    // A cleared number input yields NaN, which breaks the curve and makes
+    // start_eq fail silently.
+    if (!Number.isFinite(value)) return
     setBands(prev => prev.map((b, i) => i === idx ? { ...b, [field]: value } : b))
   }
 

@@ -27,21 +27,11 @@ impl MatrixConfig {
     }
 
     pub fn load() -> Self {
-        let path = Self::config_path();
-        std::fs::read_to_string(&path)
-            .ok()
-            .and_then(|s| toml::from_str(&s).ok())
-            .unwrap_or_default()
+        crate::config_io::load_toml(&Self::config_path()).unwrap_or_default()
     }
 
     pub fn save(&self) {
-        let path = Self::config_path();
-        if let Some(parent) = path.parent() {
-            let _ = std::fs::create_dir_all(parent);
-        }
-        if let Ok(s) = toml::to_string_pretty(self) {
-            let _ = std::fs::write(path, s);
-        }
+        crate::config_io::save_toml(&Self::config_path(), self);
     }
 
     pub fn set_node_pair(&mut self, src_node: &str, dst_node: &str, links: Vec<PortLink>) {

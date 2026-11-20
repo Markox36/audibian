@@ -134,7 +134,7 @@ fn run_meter(
         format: Default::default(),
         tx,
         key: event_key.clone(),
-        stop,
+        stop: stop.clone(),
         main_loop: main_loop.clone(),
         hold_l: 0.0,
         hold_r: 0.0,
@@ -181,7 +181,10 @@ fn run_meter(
             let channels = ud.format.channels().max(1) as usize;
 
             let (rms_l, rms_r) = if let Some(bytes) = d.data() {
-                let audio = &bytes[chunk_offset..chunk_offset + chunk_size];
+                // Offset and size come straight from the PipeWire chunk. A
+                // panic here would unwind out of an RT callback invoked from
+                // C and abort the process, so bound-check instead of indexing.
+                let Some(audio) = bytes.get(chunk_offset..chunk_offset + chunk_size) else { return };
                 let frames = n_samples / channels;
                 if frames == 0 { return; }
 
@@ -288,6 +291,19 @@ fn run_meter(
         debug!("meter {}: stream.connect: {e}", event_key);
         return;
     }
+
+    // The process callback only runs while buffers arrive, so a meter whose
+    // sink goes suspended would never see the stop flag: its thread, stream
+    // and node would leak until the app exits, and node churn recreates
+    // handles constantly. A slow timer polls the flag instead.
+    let timer_loop = main_loop.clone();
+    let timer = main_loop.loop_().add_timer(move |_| {
+        if stop.load(Ordering::Relaxed) {
+            timer_loop.quit();
+        }
+    });
+    let tick = Duration::from_millis(500);
+    let _ = timer.update_timer(Some(tick), Some(tick)).into_result();
 
     main_loop.run();
     debug!("meter thread '{}' ended", event_key);

@@ -14,11 +14,11 @@ Tested on **Debian 13 (Trixie)** with PipeWire ≥ 1.2.
 | Feature | Details |
 |---|---|
 | 🔀 **Routing Matrix** | Grid view of the PipeWire graph. Toggle a cell to create or destroy a link between any output and input port. |
-| 🎚️ **Mixer** | Input strips, return buses and a master bus, each with fader, pan, mute, solo and stereo level meters. Sends route any input to any return. |
+| 🎚️ **Mixer** | Input strips, return buses and a master bus, each with fader, pan, mute, solo and stereo level meters. Input strips have a persistent Mono toggle; sends route inputs to returns or the master. |
 | 🎛️ **Per-strip EQ** | Parametric EQ applied per strip through a PipeWire filter-chain virtual sink. |
 | 🎙️ **Noise Suppression** | Per-microphone WebRTC noise suppression. Creates a virtual clean source (`audibian-ns-…`) that any app can select instead of the raw mic. |
-| 🔊 **Soundboard** | Trigger sound files into a dedicated `audibian_soundboard` strip, with optional start/end trimming via ffmpeg. |
-| 🎹 **MIDI** | MIDI channel management with native, in-process VST3 plugin hosting (no external Carla dependency); each MIDI channel gets its own mixer strip with fader, pan, mute and solo; plugin GUIs are reparented into the main window on X11. |
+| 🔊 **Soundboard** | Trigger sound files into a dedicated `audibian_soundboard` strip. ffmpeg decodes playback to PCM and applies optional start/end trimming. |
+| 🎹 **MIDI** | MIDI channel management with native, in-process VST3 plugin hosting (no external Carla dependency); each MIDI channel gets its own mixer strip with fader, pan, mute and solo; plugin GUIs open in their own window. |
 | 💾 **Audio Profiles** | Save and restore complete audio states as TOML files under `~/.config/audibian/profiles/`. |
 | ⚡ **Persistent Routing** | `audibian --apply-persistent` recreates the whole graph headlessly. Ship it as a systemd user unit and your routing is live from login, with or without the GUI. |
 | 🚀 **Autostart** | One toggle creates an XDG autostart entry (`~/.config/autostart/audibian.desktop`) so Audibian launches with your desktop session. |
@@ -35,7 +35,7 @@ Tested on **Debian 13 (Trixie)** with PipeWire ≥ 1.2.
 | PipeWire PulseAudio layer | — | `pipewire-pulse` (`pactl` is used for module management) |
 | WebKitGTK 4.1 | — | `libwebkit2gtk-4.1-0` |
 | GTK 3 | — | `libgtk-3-0` |
-| ffmpeg | — | `ffmpeg` (only for trimmed soundboard clips) |
+| ffmpeg + ffprobe | — | `ffmpeg` (includes `ffprobe`; used for Soundboard playback and duration probing) |
 
 > **Noise suppression** uses `libpipewire-module-echo-cancel` with the WebRTC backend (`libspa-aec-webrtc`), which ships with PipeWire on Debian — no extra packages needed.
 
@@ -141,8 +141,9 @@ cell to create the link, click again to destroy it.
 ### Mixer
 
 Input strips, return buses and the master bus. Each strip has a fader, pan,
-mute, solo and a stereo level meter. Sends route any input to any return, and
-each input can be toggled in or out of the master bus.
+mute, solo and a stereo level meter. Input strips also have a persistent Mono
+toggle that centers the selected capture source. Sends route inputs to returns,
+and each input can be toggled in or out of the master bus.
 
 Strips are backed by real PipeWire null-sinks named `audibian_<name>`, so any
 application can select them as its output device.
@@ -150,13 +151,39 @@ application can select them as its output device.
 ### Soundboard
 
 Add sound files to the library and trigger them into the `audibian_soundboard`
-strip. Clips can be trimmed with start/end markers, in which case playback goes
-through an ffmpeg pipe.
+strip. Audibian decodes all supported files through ffmpeg to raw PCM, with
+optional start/end trimming applied on the fly.
 
 ### MIDI
 
-Manage MIDI channels and host plugins. On X11 the plugin GUI is reparented into
-the Audibian window instead of floating separately.
+Manage MIDI channels and host plugins. Loaded plugins receive live MIDI from
+connected keyboards, and their GUI opens in its own window.
+
+Native Linux VST3 bundles (`~/.vst3`, `/usr/lib/vst3`, `/usr/local/lib/vst3`)
+are picked up automatically. **Windows** VST3 plugins run through
+[yabridge](https://github.com/robbert-vdh/yabridge) also work — yabridge's
+bridged plugins are ordinary native `.vst3` bundles once synced (they land in
+`~/.vst3/yabridge/`), so Audibian's scanner finds and loads them the same way.
+
+> yabridge 5.1.1 only works reliably against **Wine ≤ 9.21** — Wine 10+
+> (including current `wine-staging`) breaks its window-embedding hooks and the
+> bridged plugin process will hang or crash on load. If your system's default
+> `wine` is newer, don't downgrade it (that breaks everything else using
+> Wine); instead drop a pinned Wine 9.21 build at
+> `~/.local/share/audibian/wine-yabridge/` (i.e.
+> `~/.local/share/audibian/wine-yabridge/bin/wine` exists) and Audibian will
+> automatically point yabridge's `WINELOADER`/`WINEPREFIX` at it — and only
+> at it; your system Wine is untouched. Fetch a compatible build without
+> installing it system-wide, e.g. on Debian/Ubuntu with the WineHQ apt repo
+> configured:
+> ```bash
+> mkdir -p /tmp/wine921 && cd /tmp/wine921
+> apt-get download wine-devel=9.21~trixie-1 wine-devel-amd64=9.21~trixie-1 wine-devel-i386=9.21~trixie-1
+> mkdir extract && for f in *.deb; do dpkg -x "$f" extract; done
+> mkdir -p ~/.local/share/audibian
+> mv extract/opt/wine-devel ~/.local/share/audibian/wine-yabridge
+> ```
+> No `sudo`/root needed — `.deb` files are just extracted, not installed.
 
 ### Effects
 
@@ -210,11 +237,11 @@ src/
 ├── meter.rs                 # Stereo RMS level sampling per strip
 ├── matrix_config.rs         # Routing matrix persistence
 ├── soundboard.rs            # Sound library + playback
-├── x11_embed.rs             # Reparent MIDI plugin GUIs into the main window
+├── config_io.rs             # Atomic TOML config reads/writes
 ├── audio/
 │   ├── graph.rs             # Audio graph model (nodes, ports, links)
 │   ├── pw_thread.rs         # PipeWire registry listener thread
-│   ├── eq.rs                # Biquad EQ math (Audio EQ Cookbook)
+│   ├── eq.rs                # EQ bands → PipeWire filter-chain graph
 │   ├── strip_eq.rs          # Per-strip EQ filter-chain instances
 │   └── effects.rs           # EQ & noise suppression subprocess management
 ├── midi/

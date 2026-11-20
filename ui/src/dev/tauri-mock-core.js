@@ -11,20 +11,20 @@
 
 const state = {
   input_channels: [
-    { id: 1, name: 'Microfono', sink_name: 'audibian_microfono', order: 0, fader: 1.0, pan: 0, muted: false, color: null, source_node: 'AIR 192 4', send_to_master: true },
-    { id: 2, name: 'Discord',   sink_name: 'audibian_discord',   order: 1, fader: 0.8, pan: 0, muted: false, color: null, source_node: null, send_to_master: true },
-    { id: 3, name: 'Brave',     sink_name: 'audibian_brave',     order: 2, fader: 0.8, pan: 0, muted: false, color: null, source_node: null, send_to_master: true },
-    { id: 4, name: 'Spotify',   sink_name: 'audibian_spotify',   order: 3, fader: 0.7, pan: -0.3, muted: false, color: null, source_node: null, send_to_master: true },
-    { id: 5, name: 'Soundboard',sink_name: 'audibian_soundboard',order: 4, fader: 0.6, pan: 0, muted: false, color: null, source_node: null, send_to_master: true },
-    { id: 6, name: 'Piano',     sink_name: 'audibian_piano',     order: 5, fader: 0.9, pan: 0.2, muted: false, color: null, source_node: null, send_to_master: true },
+    { id: 1, name: 'Microfono', sink_name: 'audibian_microfono', order: 0, fader: 1.0, pan: 0, muted: false, color: null, source_name: 'AIR 192 4' },
+    { id: 2, name: 'Discord',   sink_name: 'audibian_discord',   order: 1, fader: 0.8, pan: 0, muted: false, color: null, source_name: null },
+    { id: 3, name: 'Brave',     sink_name: 'audibian_brave',     order: 2, fader: 0.8, pan: 0, muted: false, color: null, source_name: null },
+    { id: 4, name: 'Spotify',   sink_name: 'audibian_spotify',   order: 3, fader: 0.7, pan: -0.3, muted: false, color: null, source_name: null },
+    { id: 5, name: 'Soundboard',sink_name: 'audibian_soundboard',order: 4, fader: 0.6, pan: 0, muted: false, color: null, source_name: null },
+    { id: 6, name: 'Piano',     sink_name: 'audibian_piano',     order: 5, fader: 0.9, pan: 0.2, muted: false, color: null, source_name: null },
   ],
   return_channels: [
     { id: 8, name: 'Reverb', sink_name: 'audibian_return_8', order: 0, fader: 0.75, pan: 0, muted: false, color: null },
   ],
   sends: [
-    { input_id: 1, return_id: 8, enabled: true },
-    { input_id: 5, return_id: 8, enabled: true },
-    { input_id: 6, return_id: 8, enabled: true },
+    { input_channel_id: 1, return_channel_id: 8, enabled: true },
+    { input_channel_id: 5, return_channel_id: 8, enabled: true },
+    { input_channel_id: 6, return_channel_id: 8, enabled: true },
   ],
   master_sink: 'alsa_output.usb-M-Audio_AIR_192_4-00.analog-stereo',
   master_fader: 1.0,

@@ -194,7 +194,9 @@ export default function Profiles() {
                   ))}
                 </select>
                 <button
-                  onClick={() => invoke('save_app_config', { config }).catch(console.error).then(() => showStatus('Configuration saved successfully'))}
+                  onClick={() => invoke('save_app_config', { config })
+                    .then(() => showStatus('Configuration saved successfully'))
+                    .catch(e => showStatus(`Error saving configuration: ${e}`))}
                   className="inline-flex items-center bg-white/[0.06] hover:bg-white/[0.1] text-neutral-200 font-extrabold text-[10px] tracking-wider uppercase py-1.5 px-3.5 border border-white/[0.12] rounded-md transition-colors"
                 >
                   Save Config
