@@ -148,7 +148,36 @@ pub fn snapshot_profile_cmd(state: State<AppState>, name: String) -> bool {
     profile.mixer_snapshot = Some(
         crate::mixer::MixerSnapshot::from_config(&state.mixer_config.lock().unwrap())
     );
-    state.profile_store.lock().unwrap().save(&profile)
+    let store = state.profile_store.lock().unwrap();
+    // Updating an existing profile keeps what the user wrote on it.
+    if let Some(old) = store.load(&name) {
+        profile.description = old.description;
+    }
+    store.save(&profile)
+}
+
+#[tauri::command(async)]
+pub fn list_profiles_info(state: State<AppState>) -> Vec<crate::profiles::model::ProfileInfo> {
+    state.profile_store.lock().unwrap().list_info()
+}
+
+#[tauri::command(async)]
+pub fn duplicate_profile(state: State<AppState>, from: String, to: String) -> Result<(), String> {
+    state.profile_store.lock().unwrap().duplicate(&from, to.trim())
+}
+
+/// Renaming also repoints the startup profile, or the app would silently
+/// stop applying it.
+#[tauri::command(async)]
+pub fn rename_profile(state: State<AppState>, from: String, to: String) -> Result<(), String> {
+    let to = to.trim().to_string();
+    state.profile_store.lock().unwrap().rename(&from, &to)?;
+    let mut cfg = AppConfig::load();
+    if cfg.default_profile.as_deref() == Some(from.as_str()) {
+        cfg.default_profile = Some(to);
+        cfg.save();
+    }
+    Ok(())
 }
 
 /// Push the (already-applied to MixerConfig) snapshot values through pactl

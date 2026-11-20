@@ -70,19 +70,67 @@ impl AudioProfile {
     }
 }
 
+/// UTC timestamp as ISO-8601 (`2026-11-20T14:03:12Z`), std only. The first
+/// profiles stored `"<days>d HH:MM:SS UTC"` instead; the UI still reads both.
 fn chrono_now() -> String {
-    // Use std only — no chrono dep needed for a simple ISO timestamp
     use std::time::{SystemTime, UNIX_EPOCH};
     let secs = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_secs())
         .unwrap_or(0);
-    // Format as "YYYY-MM-DD HH:MM:SS UTC" (rough, no chrono dependency)
-    let s = secs;
-    let sec = s % 60;
-    let min = (s / 60) % 60;
-    let hour = (s / 3600) % 24;
-    let days = s / 86400;
-    // Approximate date (good enough for display)
-    format!("{days}d {hour:02}:{min:02}:{sec:02} UTC")
+    iso_utc(secs)
+}
+
+fn iso_utc(secs: u64) -> String {
+    let (days, rem) = ((secs / 86400) as i64, secs % 86400);
+    // Howard Hinnant's civil-from-days.
+    let z = days + 719_468;
+    let era = z.div_euclid(146_097);
+    let doe = z.rem_euclid(146_097);
+    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let d = doy - (153 * mp + 2) / 5 + 1;
+    let m = if mp < 10 { mp + 3 } else { mp - 9 };
+    let y = yoe + era * 400 + i64::from(m <= 2);
+    format!(
+        "{y:04}-{m:02}-{d:02}T{:02}:{:02}:{:02}Z",
+        rem / 3600,
+        (rem / 60) % 60,
+        rem % 60
+    )
+}
+
+/// Light summary for the scene bar: enough to label a scene without
+/// shipping every profile's full link list to the UI.
+#[derive(Debug, Clone, Serialize)]
+pub struct ProfileInfo {
+    pub name: String,
+    pub created_at: String,
+    pub channels: usize,
+    pub links: usize,
+}
+
+impl From<&AudioProfile> for ProfileInfo {
+    fn from(p: &AudioProfile) -> Self {
+        Self {
+            name: p.name.clone(),
+            created_at: p.created_at.clone(),
+            channels: p.mixer_snapshot.as_ref().map_or(0, |s| s.fader.len()),
+            links: p.links.len(),
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::iso_utc;
+
+    #[test]
+    fn iso_utc_known_dates() {
+        assert_eq!(iso_utc(0), "1970-01-01T00:00:00Z");
+        // Leap day, 2024-02-29 12:34:56 UTC.
+        assert_eq!(iso_utc(1_709_210_096), "2024-02-29T12:34:56Z");
+        assert_eq!(iso_utc(1_800_000_000), "2027-01-15T08:00:00Z");
+    }
 }

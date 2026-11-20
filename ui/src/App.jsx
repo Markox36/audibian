@@ -106,6 +106,14 @@ export default function App() {
           nodes: prev.nodes.map(n => n.id === node_id ? { ...n, volume, muted } : n),
         }))
       }),
+
+      // The backend emits this 3 s after launch when a startup profile is set.
+      // Nothing consumed it, so the setting silently did nothing.
+      listen('default-profile', e => {
+        invoke('apply_profile_cmd', { name: e.payload })
+          .then(() => localStorage.setItem('audibian.activeProfile', e.payload))
+          .catch(console.error)
+      }),
     ])
 
     return () => { subs.then(us => us.forEach(u => u())) }
